@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { fetchListingById } from "../api/client";
 import type { ListingDetails } from "../api/types";
-import MapPlaceholder from "../components/MapPlaceholder"; // na razie placeholder mapy
+import DetailMap from "../components/DetailMap";
 
 export default function ListingDetailsPage() {
   const { id = "" } = useParams();
@@ -21,6 +21,15 @@ export default function ListingDetailsPage() {
       .catch((e) => setError(e?.message ?? "Błąd nieznany"))
       .finally(() => setLoading(false));
   }, [id]);
+
+const listingPoint = data?.coords
+  ? { lat: data.coords.lat, lon: data.coords.lon, title: data.title }
+  : undefined;
+
+const poiPoints = (data?.poi ?? [])
+  .filter(p => p.coords)
+  .map(p => ({ lat: p.coords!.lat, lon: p.coords!.lon, name: p.name, type: p.type }));
+
 
   const marker = useMemo(() => {
     if (!data?.coords) return [];
@@ -124,7 +133,7 @@ export default function ListingDetailsPage() {
         {/* Prawa kolumna: mapa (na razie placeholder) */}
         <aside className="card">
           <div className="label">Mapa</div>
-          <MapPlaceholder markers={marker} />
+          <DetailMap listing={listingPoint} poi={poiPoints} />
           <div style={{marginTop:8, color:"var(--muted)"}}>
             Docelowo: dynamiczne POI i okrąg zasięgu.
           </div>
