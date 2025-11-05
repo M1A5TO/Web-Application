@@ -1,7 +1,12 @@
 import type { Listing } from "../api/types";
 
-export default function ListingCard({ listing }: { listing: Listing }) {
-  // (opcjonalnie) etykiety/prosty mapping profilu z bazy
+export default function ListingCard({
+  listing,
+  markerLabel,
+}: {
+  listing: Listing;
+  markerLabel?: string;
+}) {
   const profileLabel: Record<NonNullable<Listing["profileType"]>, string> = {
     rodzinny: "Rodzinny",
     studencki: "Studencki",
@@ -20,10 +25,32 @@ export default function ListingCard({ listing }: { listing: Listing }) {
   return (
     <div
       className="listing-card"
-      style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 12, transition: "transform .05s" }}
+      style={{
+        border: "1px solid #e5e7eb1a",
+        borderRadius: 12,
+        padding: 12,
+        transition: "transform .05s",
+      }}
     >
-      {/* NAGŁÓWEK: tytuł + (opcjonalnie) badge profilu + (opcjonalnie) atrakcyjność */}
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {markerLabel && (
+          <span
+            style={{
+              background: "linear-gradient(135deg, #6d28d9 0%, #8b5cf6 100%)",
+              width: 26,
+              height: 26,
+              borderRadius: 999,
+              display: "grid",
+              placeItems: "center",
+              color: "white",
+              fontWeight: 700,
+              fontSize: 13,
+            }}
+          >
+            {markerLabel}
+          </span>
+        )}
+
         <div style={{ fontWeight: 700 }}>{listing.title}</div>
 
         {listing.profileType && (
@@ -31,8 +58,7 @@ export default function ListingCard({ listing }: { listing: Listing }) {
             style={{
               padding: "2px 8px",
               borderRadius: 999,
-              border: "1px solid var(--border)",
-              color: "var(--text)",
+              border: "1px solid rgba(255,255,255,.08)",
               fontSize: 12,
             }}
           >
@@ -66,7 +92,6 @@ export default function ListingCard({ listing }: { listing: Listing }) {
         <div>{listing.areaM2} m²</div>
       </div>
 
-      {/* Dokładna lokalizacja */}
       <div style={{ marginTop: 8 }}>
         <small style={{ color: "#6b7280" }}>Dokładna lokalizacja:&nbsp;</small>
         {coordsText ? (

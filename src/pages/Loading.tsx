@@ -10,14 +10,39 @@ export default function Loading() {
     return () => clearTimeout(t);
   }, [nav, search]);
 
-  return (
-    <div style={{textAlign:"center"}}>
-      <div style={{
-        width:56,height:56,border:"5px solid #e5e7eb",borderTopColor:"#6366f1",
-        borderRadius:"50%",margin:"24px auto",animation:"spin 1s linear infinite"
-      }}/>
-      <div>Wyszukuję oferty…</div>
-      <style>{`@keyframes spin {to{transform:rotate(360deg)}}`}</style>
+return (
+  <div
+    style={{
+      minHeight: "60vh",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      textAlign: "center",
+    }}
+  >
+    <img
+      src="/house.png"
+      alt="Wyszukiwanie mieszkania"
+      style={{
+        width: 150,              // było 80
+        height: 150,             // było 80
+        animation: "spin 1.2s linear infinite",
+        filter: "invert(1) brightness(1.6) drop-shadow(0 4px 12px rgba(0,0,0,.4))",
+      }}
+    />
+    <div style={{ marginTop: -2, fontSize: 40, fontWeight: 500 }}>
+      Wyszukuję oferty...
     </div>
-  );
+
+    <style>
+      {`@keyframes spin {
+          to { transform: rotate(360deg); }
+        }`}
+    </style>
+  </div>
+);
+
+
 }
