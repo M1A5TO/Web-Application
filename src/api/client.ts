@@ -1,0 +1,298 @@
+// src/api/client.ts
+import type { Listing, ListingDetails, SearchParams, ProfileType } from "./types";
+
+// Vite: typowanie env bez "any"
+const API_BASE_URL: string =
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "https://api.matiko.ovh";
+
+/* ===== Typy zgodne z OpenAPI ===== */
+
+type GeoPointApi = {
+  lat: number;
+  lng: number;
+};
+
+type POIOutApi = {
+  id: number;
+  category: string;
+  geolocation?: GeoPointApi | null;
+};
+
+type ApartmentApi = {
+  id: number;
+  source_website?: string | null;
+  source_id?: string | null;
+  source_url?: string | null;
+
+  price?: string | number | null;
+  currency?: string | null;
+  room_num?: number | null;
+  footage?: string | number | null;
+  price_per_m2?: string | number | null;
+  city?: string | null;
+  description?: string | null;
+
+  geolocation?: GeoPointApi | null;
+
+  photo_attractiveness?: number | null;
+  student_attractiveness?: number | null;
+  single_attractiveness?: number | null;
+  dog_owner_attractiveness?: number | null;
+  universal_attractiveness?: number | null;
+  family_attractiveness?: number | null;
+
+  poi_desc?: string | null;
+  price_desc?: string | null;
+  size_desc?: string | null;
+  style?: string | null;
+
+  photo_ids?: number[];
+  pois?: POIOutApi[];
+};
+
+type PhotoOutApi = {
+  apartment_id: number;
+  link: string;
+  style?: string | null;
+  room_type?: string | null;
+  room_style?: string | null;
+  photo_type?: string | null;
+  id: number;
+};
+
+/* ===== Mapowania profili ===== */
+
+const searchProfileToBackend: Record<SearchParams["profile"], string> = {
+  uniwersalne: "universal",
+  rodzina: "family",
+  student: "student",
+  singiel: "single",
+};
+
+const searchProfileToLabel: Record<SearchParams["profile"], ProfileType> = {
+  uniwersalne: "uniwersalny",
+  rodzina: "rodzinny",
+  student: "studencki",
+  singiel: "singiel",
+};
+
+/* ===== Pomocnicze funkcje ===== */
+
+function buildListUrl(params: SearchParams): string {
+  const url = new URL("/apartments", API_BASE_URL);
+
+  if (params.location) url.searchParams.set("city", params.location);
+  if (params.profile) url.searchParams.set("profile", searchProfileToBackend[params.profile]);
+  if (params.priceMax != null) url.searchParams.set("max_price", String(params.priceMax));
+  if (params.areaMin != null) url.searchParams.set("min_footage", String(params.areaMin));
+
+  url.searchParams.set("skip", "0");
+  url.searchParams.set("limit", "50");
+
+  return url.toString();
+}
+
+function toNumberOrZero(v: string | number | null | undefined): number {
+  if (v === null || v === undefined) return 0;
+  const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function buildTitle(a: ApartmentApi): string {
+  const city = a.city ?? "mieszkanie";
+  if (a.room_num && a.room_num > 0) return `${a.room_num}-pokojowe, ${city}`;
+  return `Mieszkanie, ${city}`;
+}
+
+function pickProfileLabel(profile?: SearchParams["profile"]): ProfileType | undefined {
+  return profile ? searchProfileToLabel[profile] : undefined;
+}
+
+function pickAttractivenessScore(a: ApartmentApi, profile?: SearchParams["profile"]): number | undefined {
+  if (!profile) return a.universal_attractiveness ?? undefined;
+
+  switch (profile) {
+    case "student":
+      return a.student_attractiveness ?? undefined;
+    case "singiel":
+      return a.single_attractiveness ?? undefined;
+    case "rodzina":
+      return a.family_attractiveness ?? undefined;
+    case "uniwersalne":
+      return a.universal_attractiveness ?? undefined;
+    default:
+      return undefined;
+  }
+}
+
+// Haversine – odległość w metrach
+function distanceMeters(a: GeoPointApi, b: GeoPointApi): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+
+  const φ1 = toRad(a.lat);
+  const φ2 = toRad(b.lat);
+  const Δφ = toRad(b.lat - a.lat);
+  const Δλ = toRad(b.lng - a.lng);
+
+  const sinΔφ = Math.sin(Δφ / 2);
+  const sinΔλ = Math.sin(Δλ / 2);
+
+  const x = sinΔφ * sinΔφ + Math.cos(φ1) * Math.cos(φ2) * sinΔλ * sinΔλ;
+  const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+  return R * c;
+}
+
+/* ===== Zdjęcia: cache + fetch ===== */
+
+const photoLinkCache = new Map<number, string | null>();
+
+async function fetchPhotoLink(photoId: number): Promise<string | null> {
+  if (!Number.isFinite(photoId)) return null;
+
+  if (photoLinkCache.has(photoId)) {
+    return photoLinkCache.get(photoId) ?? null;
+  }
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/photos/${photoId}`, { method: "GET" });
+    if (!res.ok) {
+      photoLinkCache.set(photoId, null);
+      return null;
+    }
+
+    const p: PhotoOutApi = await res.json();
+    const link = typeof p.link === "string" && p.link.length > 0 ? p.link : null;
+    photoLinkCache.set(photoId, link);
+    return link;
+  } catch {
+    photoLinkCache.set(photoId, null);
+    return null;
+  }
+}
+
+// Prosty limiter równoległości (żeby nie odpalić np. 50 requestów naraz)
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, idx: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length) as R[];
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const current = nextIndex++;
+      results[current] = await mapper(items[current], current);
+    }
+  }
+
+  const workers = Array.from({ length: Math.max(1, limit) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
+
+/* ===== Funkcje eksportowane ===== */
+
+export async function fetchListings(params: SearchParams): Promise<Listing[]> {
+  const res = await fetch(buildListUrl(params));
+  if (!res.ok) throw new Error(`Błąd API (lista mieszkań) – HTTP ${res.status}`);
+
+  const data: ApartmentApi[] = await res.json();
+  const profileLabel = pickProfileLabel(params.profile);
+
+  // miniatury: bierzemy 1. photo_id (jeśli jest) i dociągamy link
+  // limit równoległych requestów: 6 (bezpieczne i wystarczająco szybkie)
+  return mapWithConcurrency(data, 6, async (a) => {
+    const coords =
+      a.geolocation && a.geolocation.lat != null && a.geolocation.lng != null
+        ? { lat: a.geolocation.lat, lon: a.geolocation.lng }
+        : undefined;
+
+    const firstPhotoId =
+      Array.isArray(a.photo_ids) && a.photo_ids.length > 0 ? a.photo_ids[0] : undefined;
+
+    const thumb = firstPhotoId != null ? await fetchPhotoLink(firstPhotoId) : null;
+
+    return {
+      id: String(a.id),
+      title: buildTitle(a),
+      pricePln: toNumberOrZero(a.price),
+      areaM2: toNumberOrZero(a.footage),
+      address: a.city ?? "",
+      coords,
+      profileType: profileLabel,
+      attractivenessScore: pickAttractivenessScore(a, params.profile),
+      thumbnailUrl: thumb ?? undefined,
+    };
+  });
+}
+
+export async function fetchListingById(id: string): Promise<ListingDetails> {
+  const aptRes = await fetch(`${API_BASE_URL}/apartments/${id}`);
+  if (!aptRes.ok) throw new Error(`Błąd API (szczegóły mieszkania) – HTTP ${aptRes.status}`);
+
+  const a: ApartmentApi = await aptRes.json();
+
+  const coords =
+    a.geolocation && a.geolocation.lat != null && a.geolocation.lng != null
+      ? { lat: a.geolocation.lat, lon: a.geolocation.lng }
+      : undefined;
+
+  // ===== POI: bierzemy bezpośrednio z /apartments/{id} -> pois =====
+  const poi =
+    (a.pois ?? [])
+      .filter((p) => p.geolocation && p.geolocation.lat != null && p.geolocation.lng != null)
+      .map((p) => {
+        const poiGeo = p.geolocation!;
+        const distanceM =
+          coords
+            ? distanceMeters(
+                { lat: coords.lat, lng: coords.lon },
+                { lat: poiGeo.lat, lng: poiGeo.lng }
+              )
+            : 0;
+
+        return {
+          type: p.category,
+          name: p.category,
+          distanceM,
+          coords: { lat: poiGeo.lat, lon: poiGeo.lng },
+        };
+      }) ?? [];
+
+  // ===== Zdjęcia: photo_ids -> /photos/{id} -> link =====
+  const photoIds = Array.isArray(a.photo_ids) ? a.photo_ids : [];
+  const photoLinksRaw = await mapWithConcurrency(photoIds, 6, async (pid) => fetchPhotoLink(pid));
+  const photoLinks = photoLinksRaw.filter((x): x is string => typeof x === "string" && x.length > 0);
+
+  const scores = {
+    overall: a.universal_attractiveness ?? undefined,
+    commute: a.student_attractiveness ?? undefined,
+    green: a.dog_owner_attractiveness ?? undefined,
+    services: a.single_attractiveness ?? undefined,
+  };
+
+  return {
+    id: String(a.id ?? id),
+    title: buildTitle(a),
+    pricePln: toNumberOrZero(a.price),
+    areaM2: toNumberOrZero(a.footage),
+    address: a.city ?? "—",
+    coords,
+
+    profileType: undefined,
+    attractivenessScore: a.universal_attractiveness ?? undefined,
+
+    thumbnailUrl: photoLinks[0] ?? undefined,
+    photos: photoLinks,
+
+    description: a.description ?? undefined,
+    scores,
+    source: {
+      scraper: a.source_website ?? undefined,
+      url: a.source_url ?? undefined,
+    },
+    poi,
+  };
+}
