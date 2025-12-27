@@ -1,4 +1,4 @@
-# miasto15 (frontend)
+# M1A5TO (frontend)
 
 Frontend aplikacji **M1A5TO** zbudowany w **React + TypeScript + Vite**.
 
