@@ -101,7 +101,17 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
         )}
       </div>
 
-      <small>{listing.address}</small>
+      <small>
+        {listing.address}
+        {listing.id ? (
+          <>
+            {" · "}
+            <span title="ID mieszkania" style={{ color: "#9ca3af", fontWeight: 600 }}>
+              ID: {listing.id}
+            </span>
+          </>
+        ) : null}
+      </small>
 
       <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
         <div>
