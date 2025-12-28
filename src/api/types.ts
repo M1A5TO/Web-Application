@@ -1,7 +1,7 @@
 // src/api/types.ts
 
 // profil wyszukiwania (to co idzie w query ?profile=)
-export type Profile = "uniwersalne" | "rodzina" | "student" | "singiel";
+export type Profile = "uniwersalne" | "rodzina" | "student" | "singiel" | "wlasciciel_psa";
 
 export interface SearchParams {
   location: string;
@@ -12,7 +12,7 @@ export interface SearchParams {
 }
 
 // profil opisowy w UI (etykieta na karcie)
-export type ProfileType = "rodzinny" | "studencki" | "singiel" | "uniwersalny";
+export type ProfileType = "rodzinny" | "studencki" | "singiel" | "uniwersalny" | "wlasciciel_psa";
 
 export interface Listing {
   id: string;

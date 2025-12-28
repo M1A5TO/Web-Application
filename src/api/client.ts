@@ -60,6 +60,17 @@ type PhotoOutApi = {
   id: number;
 };
 
+type SortDir = "asc" | "desc";
+
+export type ApartmentsSortKey = "price" | "footage" | "attractiveness";
+
+type ListPaging = {
+  skip?: number;
+  limit?: number;
+  sortKey?: ApartmentsSortKey;
+  sortDir?: SortDir;
+};
+
 /* ===== Mapowania profili ===== */
 
 const searchProfileToBackend: Record<SearchParams["profile"], string> = {
@@ -67,6 +78,7 @@ const searchProfileToBackend: Record<SearchParams["profile"], string> = {
   rodzina: "family",
   student: "student",
   singiel: "single",
+  wlasciciel_psa: "dog_owner",
 };
 
 const searchProfileToLabel: Record<SearchParams["profile"], ProfileType> = {
@@ -74,11 +86,12 @@ const searchProfileToLabel: Record<SearchParams["profile"], ProfileType> = {
   rodzina: "rodzinny",
   student: "studencki",
   singiel: "singiel",
+  wlasciciel_psa: "wlasciciel_psa",
 };
 
 /* ===== Pomocnicze funkcje ===== */
 
-function buildListUrl(params: SearchParams): string {
+function buildListUrl(params: SearchParams, paging?: ListPaging): string {
   const url = new URL("/apartments", API_BASE_URL);
 
   if (params.location) url.searchParams.set("city", params.location);
@@ -86,8 +99,12 @@ function buildListUrl(params: SearchParams): string {
   if (params.priceMax != null) url.searchParams.set("max_price", String(params.priceMax));
   if (params.areaMin != null) url.searchParams.set("min_footage", String(params.areaMin));
 
-  url.searchParams.set("skip", "0");
-  url.searchParams.set("limit", "50");
+  // Optional backend sorting (if supported). If the API ignores these params, it will fall back to its default ordering.
+  if (paging?.sortKey) url.searchParams.set("sort", paging.sortKey);
+  if (paging?.sortDir) url.searchParams.set("order", paging.sortDir);
+
+  url.searchParams.set("skip", String(paging?.skip ?? 0));
+  url.searchParams.set("limit", String(paging?.limit ?? 10));
 
   return url.toString();
 }
@@ -118,6 +135,8 @@ function pickAttractivenessScore(a: ApartmentApi, profile?: SearchParams["profil
       return a.single_attractiveness ?? undefined;
     case "rodzina":
       return a.family_attractiveness ?? undefined;
+    case "wlasciciel_psa":
+      return a.dog_owner_attractiveness ?? undefined;
     case "uniwersalne":
       return a.universal_attractiveness ?? undefined;
     default:
@@ -194,8 +213,8 @@ async function mapWithConcurrency<T, R>(
 
 /* ===== Funkcje eksportowane ===== */
 
-export async function fetchListings(params: SearchParams): Promise<Listing[]> {
-  const res = await fetch(buildListUrl(params));
+export async function fetchListings(params: SearchParams, paging?: ListPaging): Promise<Listing[]> {
+  const res = await fetch(buildListUrl(params, paging));
   if (!res.ok) throw new Error(`Błąd API (lista mieszkań) – HTTP ${res.status}`);
 
   const data: ApartmentApi[] = await res.json();

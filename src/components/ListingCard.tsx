@@ -12,6 +12,7 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
     studencki: "Studencki",
     singiel: "Singiel",
     uniwersalny: "Uniwersalny",
+    wlasciciel_psa: "Właściciel psa",
   };
 
   const coordsText = listing.coords
@@ -96,12 +97,22 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
             }}
             title="Atrakcyjność (z bazy)"
           >
-            {(listing.attractivenessScore * 100).toFixed(0)}%
+            {Math.round(listing.attractivenessScore)}%
           </span>
         )}
       </div>
 
-      <small>{listing.address}</small>
+      <small>
+        {listing.address}
+        {listing.id ? (
+          <>
+            {" · "}
+            <span title="ID mieszkania" style={{ color: "#9ca3af", fontWeight: 600 }}>
+              ID: {listing.id}
+            </span>
+          </>
+        ) : null}
+      </small>
 
       <div style={{ marginTop: 8, display: "flex", gap: 12, flexWrap: "wrap" }}>
         <div>

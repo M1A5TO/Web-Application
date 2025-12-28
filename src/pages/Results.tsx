@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fetchListings } from "../api/client";
 import type { Listing } from "../api/types";
 import ListingCard from "../components/ListingCard";
@@ -65,11 +65,24 @@ export default function Results() {
   const profile = q.get("profile") ?? "uniwersalne";
   const navigate = useNavigate();
 
+  const profileLabel: Record<string, string> = {
+    uniwersalne: "uniwersalny",
+    student: "student",
+    singiel: "singiel",
+    wlasciciel_psa: "właściciel psa",
+    rodzina: "rodzinny",
+  };
+
   const priceMax = q.get("priceMax") ? Number(q.get("priceMax")) : undefined;
   const areaMin = q.get("areaMin") ? Number(q.get("areaMin")) : undefined;
   const maxDistanceKm = q.get("maxDistanceKm") ? Number(q.get("maxDistanceKm")) : undefined;
 
   const [sort, setSort] = useState<SortKey>("relevance");
+
+  // how many offers we want cached client-side
+  const [targetCount, setTargetCount] = useState<100 | 250 | 500 | 1000>(100);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
+
   const [items, setItems] = useState<Listing[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,36 +90,114 @@ export default function Results() {
   // cache adresów po ID ogłoszenia
   const [geoById, setGeoById] = useState<Record<string, string>>({});
 
-  // paginacja
+  // paginacja (client-side over cached items)
   const [page, setPage] = useState(1);
-  const pageSize = 5;
+  const pageSize = 10;
 
+  // cancel/background run guard
+  const fetchRunId = useRef(0);
+
+  // reset when filters change
   useEffect(() => {
-    setLoading(true);
+    setPage(1);
+    setItems([]);
+    setGeoById({});
     setError(null);
-
-    fetchListings({
-      location,
-      profile: profile as any,
-      priceMax,
-      areaMin,
-      maxDistanceKm,
-    })
-      .then((r) => {
-        setItems(r);
-        setPage(1);
-      })
-      .catch((e) => setError(e?.message ?? "Błąd nieznany"))
-      .finally(() => setLoading(false));
   }, [location, profile, priceMax, areaMin, maxDistanceKm]);
 
+  // progressively load offers up to targetCount
+  useEffect(() => {
+    const myRun = ++fetchRunId.current;
+    let cancelled = false;
+
+    async function run() {
+      // if we already have enough cached, nothing to do
+      if (items.length >= targetCount) {
+        setLoading(false);
+        setIsFetchingMore(false);
+        return;
+      }
+
+      setLoading(items.length === 0);
+      setIsFetchingMore(true);
+
+      try {
+        const batchSize = 100; // API default, fewer roundtrips
+        let loaded = items.length;
+
+        while (!cancelled && fetchRunId.current === myRun && loaded < targetCount) {
+          const skip = loaded;
+          const limit = Math.min(batchSize, targetCount - loaded);
+
+          const batch = await fetchListings(
+            {
+              location,
+              profile: profile as any,
+              priceMax,
+              areaMin,
+              maxDistanceKm,
+            },
+            { skip, limit }
+          );
+
+          if (cancelled || fetchRunId.current !== myRun) return;
+
+          if (batch.length === 0) {
+            // no more records available
+            break;
+          }
+
+          // append unique-by-id (defensive)
+          let appended = 0;
+          setItems((prev) => {
+            const seen = new Set(prev.map((x) => x.id));
+            const merged = [...prev];
+            for (const b of batch) {
+              if (!seen.has(b.id)) {
+                merged.push(b);
+                appended++;
+              }
+            }
+            return merged;
+          });
+
+          // update local loaded count (use batch length as upper-bound, but rely on appended when possible)
+          loaded += Math.max(appended, batch.length);
+
+          // if API returned fewer than requested => likely end
+          if (batch.length < limit) break;
+
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      } catch (e) {
+        if (!cancelled && fetchRunId.current === myRun) {
+          setError((e as any)?.message ?? "Błąd nieznany");
+        }
+      } finally {
+        if (!cancelled && fetchRunId.current === myRun) {
+          setLoading(false);
+          setIsFetchingMore(false);
+        }
+      }
+    }
+
+    run();
+
+    return () => {
+      cancelled = true;
+    };
+    // re-run when targetCount or filters change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetCount, location, profile, priceMax, areaMin, maxDistanceKm]);
+
   const sorted = useMemo(() => {
+    if (sort === "relevance") return items; // preserve API order
+
     const copy = [...items];
     if (sort === "priceAsc") copy.sort((a, b) => a.pricePln - b.pricePln);
     if (sort === "priceDesc") copy.sort((a, b) => b.pricePln - a.pricePln);
     if (sort === "areaDesc") copy.sort((a, b) => b.areaM2 - a.areaM2);
     if (sort === "areaAsc") copy.sort((a, b) => a.areaM2 - b.areaM2);
-    if (sort === "relevance") copy.sort((a, b) => (b.attractivenessScore ?? 0) - (a.attractivenessScore ?? 0));
     return copy;
   }, [items, sort]);
 
@@ -165,116 +256,191 @@ export default function Results() {
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 900 }}>Wyniki</div>
           <div style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.35 }}>
-            Lokalizacja: {location || "—"} • Profil: {profile}
+            Lokalizacja: {location || "—"} • Profil: {profileLabel[profile] ?? profile}
             {priceMax ? ` • Cena ≤ ${Number(priceMax).toLocaleString("pl-PL")} PLN` : ""}
             {areaMin ? ` • Metraż ≥ ${areaMin} m²` : ""}
-            {maxDistanceKm ? ` • Max odległość: ${maxDistanceKm} km` : ""}
+            {/* maxDistanceKm removed from UI but kept for backward compatibility */}
+          </div>
+          <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            Wczytane oferty: <b style={{ color: "var(--text)" }}>{sorted.length}</b>
+            {isFetchingMore ? (
+              <>
+                <span>• wczytywanie ofert…</span>
+                <img
+                  src="/M1A5TO.png"
+                  alt="Wczytywanie"
+                  style={{ width: 14, height: 14, animation: "spin 1.2s linear infinite" }}
+                />
+              </>
+            ) : null}
           </div>
         </div>
 
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>Sortowanie:</span>
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortKey)}
-            className="select"
-            style={{ minWidth: 210 }}
-          >
-            <option value="relevance">Trafność (domyślnie)</option>
-            <option value="priceAsc">Cena rosnąco</option>
-            <option value="priceDesc">Cena malejąco</option>
-            <option value="areaDesc">Powierzchnia malejąco</option>
-            <option value="areaAsc">Powierzchnia rosnąco</option>
-          </select>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 600 }}>Oferty:</span>
+            <select
+              value={targetCount}
+              onChange={(e) => setTargetCount(Number(e.target.value) as any)}
+              className="select"
+              style={{ minWidth: 120 }}
+              title="Ile ofert wczytać do sortowania i przeglądania"
+            >
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+              <option value={500}>500</option>
+              <option value={1000}>1000</option>
+            </select>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 600 }}>Sortowanie:</span>
+            <select
+              value={sort}
+              onChange={(e) => {
+                setSort(e.target.value as SortKey);
+                setPage(1);
+              }}
+              className="select"
+              style={{ minWidth: 210 }}
+            >
+              <option value="relevance">Atrakcyjność (wybrany profil)</option>
+              <option value="priceAsc">Cena rosnąco</option>
+              <option value="priceDesc">Cena malejąco</option>
+              <option value="areaDesc">Powierzchnia malejąco</option>
+              <option value="areaAsc">Powierzchnia rosnąco</option>
+            </select>
+          </div>
         </div>
+
+        <style>
+          {`@keyframes spin { to { transform: rotate(360deg); } }`}
+        </style>
       </div>
 
-      {loading && <small>Ładowanie listy…</small>}
+      {loading && (
+        <div
+          className="card"
+          style={{
+            display: "grid",
+            placeItems: "center",
+            textAlign: "center",
+            gap: 12,
+            padding: 28,
+          }}
+        >
+          <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>Wczytywanie ofert…</div>
+          <img
+            src="/M1A5TO.png"
+            alt="Wczytywanie"
+            style={{
+              width: 56,
+              height: 56,
+              animation: "spin 1.2s linear infinite",
+              filter: "drop-shadow(0 6px 16px rgba(0,0,0,.35))",
+            }}
+          />
+        </div>
+      )}
       {!loading && error && <div style={{ color: "#b91c1c" }}>Błąd: {error}</div>}
       {!loading && !error && sorted.length === 0 && <small>Brak wyników.</small>}
 
-      {/* Główny układ: równe kolumny + większa mapa */}
-      <div
-        className="grid-results"
-        style={{
-          gridTemplateColumns: "1fr 1fr",
-          alignItems: "stretch",
-          gap: 12,
-        }}
-      >
-        {/* lewa kolumna – lista */}
-        <div style={{ display: "grid", gap: 12 }}>
-          {pageItems.map((l, idx) => {
-            const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            const markerLabel = idx < letters.length ? letters[idx] : `#${idx + 1}`;
+      {/* Główny układ: lista + mapa (pokazujemy dopiero po wczytaniu) */}
+      {!loading && sorted.length > 0 ? (
+        <div
+          className="grid-results"
+          style={{
+            gridTemplateColumns: "1fr 1fr",
+            alignItems: "stretch",
+            gap: 12,
+          }}
+        >
+          {/* lewa kolumna – lista */}
+          <div style={{ display: "grid", gap: 12 }}>
+            {pageItems.map((l, idx) => {
+              const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+              const markerLabel = idx < letters.length ? letters[idx] : `#${idx + 1}`;
 
-            return (
-              <Link key={l.id} to={`/listing/${l.id}${search}`} style={{ textDecoration: "none", color: "inherit" }}>
-                {/* przekazujemy adres do karty */}
-                <ListingCard listing={l} markerLabel={markerLabel} locationLabel={geoById[l.id]} />
-              </Link>
-            );
-          })}
+              return (
+                <Link key={l.id} to={`/listing/${l.id}${search}`} style={{ textDecoration: "none", color: "inherit" }}>
+                  <ListingCard listing={l} markerLabel={markerLabel} locationLabel={geoById[l.id]} />
+                </Link>
+              );
+            })}
 
-          {totalPages > 1 && (
-            <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
-              {Array.from({ length: totalPages }).map((_, idx) => {
-                const pageNumber = idx + 1;
-                const from = (pageNumber - 1) * pageSize + 1;
-                const to = Math.min(pageNumber * pageSize, sorted.length);
-                const active = pageNumber === page;
-                return (
-                  <button
-                    key={pageNumber}
-                    onClick={() => setPage(pageNumber)}
-                    style={{
-                      background: active ? "rgba(139,92,246,0.9)" : "rgba(15,23,42,0.4)",
-                      border: "1px solid rgba(139,92,246,0.45)",
-                      color: "white",
-                      borderRadius: 999,
-                      padding: "4px 12px",
-                      fontSize: 12,
-                      cursor: "pointer",
-                    }}
-                  >
-                    {from} – {to}
-                  </button>
-                );
-              })}
+            {totalPages > 1 && (
+              <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  style={{
+                    background: page === 1 ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.4)",
+                    border: "1px solid rgba(139,92,246,0.45)",
+                    color: "white",
+                    borderRadius: 999,
+                    padding: "4px 12px",
+                    fontSize: 12,
+                    cursor: page === 1 ? "not-allowed" : "pointer",
+                    opacity: page === 1 ? 0.6 : 1,
+                  }}
+                >
+                  Poprzednie
+                </button>
+
+                <span style={{ alignSelf: "center", color: "var(--muted)", fontSize: 12 }}>
+                  Strona {page} / {totalPages}
+                </span>
+
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  style={{
+                    background: page >= totalPages ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.4)",
+                    border: "1px solid rgba(139,92,246,0.45)",
+                    color: "white",
+                    borderRadius: 999,
+                    padding: "4px 12px",
+                    fontSize: 12,
+                    cursor: page >= totalPages ? "not-allowed" : "pointer",
+                    opacity: page >= totalPages ? 0.6 : 1,
+                  }}
+                >
+                  Następne
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* prawa kolumna – mapa */}
+          <div className="card" style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: 12 }}>
+            <div className="label" style={{ marginBottom: 0 }}>
+              Mapa
             </div>
-          )}
-        </div>
 
-        {/* prawa kolumna – większa mapa (bez podpisu "Docelowo...") */}
-        <div className="card" style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: 12 }}>
-          <div className="label" style={{ marginBottom: 0 }}>
-            Mapa
-          </div>
+            <div style={{ minHeight: 760 }}>
+              <ResultsMap
+                markers={pageItems
+                  .filter((x) => x.coords)
+                  .map((x, idx) => {
+                    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                    const label = idx < letters.length ? letters[idx] : `#${idx + 1}`;
 
-          <div style={{ minHeight: 760 }}>
-            <ResultsMap
-  markers={pageItems
-    .filter((x) => x.coords)
-    .map((x, idx) => {
-      const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-      const label = idx < letters.length ? letters[idx] : `#${idx + 1}`;
-
-      return {
-        id: x.id,
-        lat: x.coords!.lat,
-        lon: x.coords!.lon,
-        title: x.title,
-        label,
-      };
-    })}
-  onMarkerClick={(id) => {
-    navigate(`/listing/${id}${search}`);
-  }}
-/>
-
+                    return {
+                      id: x.id,
+                      lat: x.coords!.lat,
+                      lon: x.coords!.lon,
+                      title: x.title,
+                      label,
+                    };
+                  })}
+                onMarkerClick={(id) => {
+                  navigate(`/listing/${id}${search}`);
+                }}
+              />
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
