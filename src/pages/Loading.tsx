@@ -23,13 +23,13 @@ return (
     }}
   >
     <img
-      src="/house.png"
-      alt="Wyszukiwanie mieszkania"
+      src="/M1A5TO.png"
+      alt="M1A5TO"
       style={{
-        width: 150,              // było 80
-        height: 150,             // było 80
+        width: 150,
+        height: 150,
         animation: "spin 1.2s linear infinite",
-        filter: "invert(1) brightness(1.6) drop-shadow(0 4px 12px rgba(0,0,0,.4))",
+        filter: "drop-shadow(0 4px 12px rgba(0,0,0,.4))",
       }}
     />
     <div style={{ marginTop: -2, fontSize: 40, fontWeight: 500 }}>

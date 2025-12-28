@@ -4,10 +4,9 @@ import { useNavigate } from "react-router-dom";
 export default function Home() {
   const nav = useNavigate();
   const [location, setLocation] = useState("");
-  const [profile, setProfile] = useState("uniwersalne");
+  const [profile, setProfile] = useState<"uniwersalne" | "student" | "singiel" | "wlasciciel_psa" | "rodzina">("uniwersalne");
   const [priceMax, setPriceMax] = useState<string>("");
   const [areaMin, setAreaMin] = useState<string>("");
-  const [maxDistanceKm, setMaxDistanceKm] = useState<number>(0);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -16,66 +15,96 @@ export default function Home() {
       profile,
       ...(priceMax ? { priceMax } : {}),
       ...(areaMin ? { areaMin } : {}),
-      ...(maxDistanceKm ? { maxDistanceKm: String(maxDistanceKm) } : {}),
     });
     nav(`/loading?${q.toString()}`);
   }
 
   return (
-    <form className="card" onSubmit={submit} style={{maxWidth: 760, margin:"0 auto", display:"grid", gap:16}}>
+    <form className="card" onSubmit={submit} style={{ maxWidth: 760, margin: "0 auto", display: "grid", gap: 16 }}>
       <div>
-        <label className="label">Lokalizacja</label>
+        <label className="label">Wprowadź lokalizację</label>
         <input
           className="input"
           value={location}
-          onChange={e=>setLocation(e.target.value)}
-          placeholder="np. Gdańsk, Wrzeszcz"
+          onChange={(e) => setLocation(e.target.value)}
+          placeholder="np. Gdańsk, Warszawa, Wrocław"
           required
         />
       </div>
 
       <div>
-        <label className="label">Profil mieszkania</label>
-        <select className="select" value={profile} onChange={e=>setProfile(e.target.value)}>
-          <option value="uniwersalne">Uniwersalne</option>
-          <option value="rodzina">Rodzina</option>
+        <label className="label">Wybierz swój profil</label>
+        <select className="select" value={profile} onChange={(e) => setProfile(e.target.value as "uniwersalne" | "student" | "singiel" | "wlasciciel_psa" | "rodzina")}>
+          <option value="uniwersalne">Uniwersalny</option>
           <option value="student">Student</option>
           <option value="singiel">Singiel</option>
+          <option value="wlasciciel_psa">Właściciel psa</option>
+          <option value="rodzina">Rodzinny</option>
         </select>
       </div>
 
       <div>
-        <label className="label">Cena maks. (PLN)</label>
-        <input className="input" value={priceMax} onChange={e=>setPriceMax(e.target.value)} placeholder="np. 700000" />
-      </div>
-
-      <div>
-        <label className="label">Metraż min. (m²)</label>
-        <input className="input" value={areaMin} onChange={e=>setAreaMin(e.target.value)} placeholder="np. 30" />
-      </div>
-
-      <div>
-        <label className="label">Maks. odległość od punktu (km)</label>
-        <div className="range-wrap">
+        <label className="label">Wprowadź cenę maksymalną (opcjonalnie)</label>
+        <div style={{ position: "relative" }}>
           <input
-            className="range"
-            type="range"
-            min={0}
-            max={50}
-            step={1}
-            value={maxDistanceKm}
-            onChange={e=>setMaxDistanceKm(Number(e.target.value))}
-            aria-label="Maksymalna odległość w kilometrach"
+            className="input"
+            inputMode="numeric"
+            value={priceMax}
+            onChange={(e) => setPriceMax(e.target.value.replace(/[^0-9]/g, ""))}
+            placeholder="np. 700000"
+            style={{ paddingRight: 52 }}
+            aria-label="Cena maksymalna"
           />
-          <div className="range-value">{maxDistanceKm} km</div>
-        </div>
-        <div style={{color:"var(--muted)", marginTop:6, fontSize:13}}>
-          0 km = bez ograniczenia (logika odległości po stronie backendu).
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              right: 14,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--muted)",
+              fontWeight: 700,
+              pointerEvents: "none",
+            }}
+          >
+            zł
+          </span>
         </div>
       </div>
 
       <div>
-        <button className="button" type="submit" style={{width:"100%"}}>Szukaj</button>
+        <label className="label">Wprowadź minimalny metraż (opcjonalnie)</label>
+        <div style={{ position: "relative" }}>
+          <input
+            className="input"
+            inputMode="numeric"
+            value={areaMin}
+            onChange={(e) => setAreaMin(e.target.value.replace(/[^0-9]/g, ""))}
+            placeholder="np. 40"
+            style={{ paddingRight: 52 }}
+            aria-label="Minimalny metraż"
+          />
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              right: 14,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "var(--muted)",
+              fontWeight: 700,
+              pointerEvents: "none",
+            }}
+          >
+            m²
+          </span>
+        </div>
+      </div>
+
+      <div>
+        <button className="button" type="submit" style={{ width: "100%" }}>
+          Szukaj
+        </button>
       </div>
     </form>
   );

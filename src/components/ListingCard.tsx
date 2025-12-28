@@ -12,6 +12,7 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
     studencki: "Studencki",
     singiel: "Singiel",
     uniwersalny: "Uniwersalny",
+    wlasciciel_psa: "Właściciel psa",
   };
 
   const coordsText = listing.coords
@@ -96,7 +97,7 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
             }}
             title="Atrakcyjność (z bazy)"
           >
-            {(listing.attractivenessScore * 100).toFixed(0)}%
+            {Math.round(listing.attractivenessScore)}%
           </span>
         )}
       </div>
