@@ -102,8 +102,36 @@ export default function Home() {
       </div>
 
       <div>
-        <button className="button" type="submit" style={{ width: "100%" }}>
-          Szukaj
+        <button
+          className="button button--outline"
+          type="submit"
+          style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
+        >
+          <svg
+            aria-hidden="true"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            style={{ opacity: 0.9 }}
+          >
+            <path
+              d="M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M21 21l-4.35-4.35"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          Wyszukaj
         </button>
       </div>
     </form>
