@@ -45,8 +45,8 @@ function buildStreetLabelFromNominatim(j: NominatimResponse | null): string | nu
   const house = a.house_number ? ` ${a.house_number}` : "";
   const city = a.city || a.town || a.village || a.municipality || a.county;
 
-  if (road && city) return `${road}${house} • ${city}`;
-  if (road) return `${road}${house}`;
+  if (road && city) return `ul. ${road}${house} • ${city}`;
+  if (road) return `ul. ${road}${house}`;
   if (city) return city;
 
   if (j.display_name) {
@@ -206,6 +206,49 @@ export default function Results() {
   const end = start + pageSize;
   const pageItems = sorted.slice(start, end);
 
+  function goToPage(p: number) {
+    const next = Math.max(1, Math.min(totalPages, p));
+    setPage(next);
+    // UX: po zmianie strony wracamy do góry listy
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  type PagerToken = number | "ellipsis";
+
+  function buildPagerTokens(current: number, total: number): PagerToken[] {
+    if (total <= 1) return [1];
+
+    // For small totals show everything
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+
+    const tokens: PagerToken[] = [];
+    const push = (t: PagerToken) => {
+      if (tokens.length === 0 || tokens[tokens.length - 1] !== t) tokens.push(t);
+    };
+
+    const addRange = (a: number, b: number) => {
+      for (let i = a; i <= b; i++) push(i);
+    };
+
+    // Always show first
+    push(1);
+
+    // Window around current
+    const left = Math.max(2, current - 1);
+    const right = Math.min(total - 1, current + 1);
+
+    if (left > 2) push("ellipsis");
+    addRange(left, right);
+    if (right < total - 1) push("ellipsis");
+
+    // Always show last
+    push(total);
+
+    return tokens;
+  }
+
+  const pagerTokens = useMemo(() => buildPagerTokens(page, totalPages), [page, totalPages]);
+
   // Reverse geocoding dla bieżącej strony (tylko brakujące ID, z cache)
   useEffect(() => {
     const ctrl = new AbortController();
@@ -351,7 +394,7 @@ export default function Results() {
           className="grid-results"
           style={{
             gridTemplateColumns: "1fr 1fr",
-            alignItems: "stretch",
+            alignItems: "start",
             gap: 12,
           }}
         >
@@ -369,75 +412,157 @@ export default function Results() {
             })}
 
             {totalPages > 1 && (
-              <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  marginTop: 4,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                aria-label="Paginacja"
+              >
+                {/* prev */}
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  type="button"
+                  onClick={() => goToPage(page - 1)}
                   disabled={page === 1}
+                  title="Poprzednia strona"
+                  aria-label="Poprzednia strona"
                   style={{
-                    background: page === 1 ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.4)",
-                    border: "1px solid rgba(139,92,246,0.45)",
-                    color: "white",
+                    width: 36,
+                    height: 36,
                     borderRadius: 999,
-                    padding: "4px 12px",
-                    fontSize: 12,
+                    display: "grid",
+                    placeItems: "center",
+                    background: page === 1 ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.35)",
+                    border: "1px solid rgba(139,92,246,0.35)",
+                    color: page === 1 ? "rgba(154,164,178,0.55)" : "rgba(229,231,235,0.85)",
                     cursor: page === 1 ? "not-allowed" : "pointer",
-                    opacity: page === 1 ? 0.6 : 1,
+                    opacity: page === 1 ? 0.75 : 1,
+                    fontWeight: 700,
+                    fontSize: 16,
+                    lineHeight: 1,
                   }}
                 >
-                  Poprzednie
+                  ‹
                 </button>
 
-                <span style={{ alignSelf: "center", color: "var(--muted)", fontSize: 12 }}>
-                  Strona {page} / {totalPages}
-                </span>
+                {/* numbers */}
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {pagerTokens.map((t, i) => {
+                    if (t === "ellipsis") {
+                      return (
+                        <span key={`e-${i}`} style={{ color: "var(--muted)", padding: "0 4px" }}>
+                          …
+                        </span>
+                      );
+                    }
 
+                    const isActive = t === page;
+
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => goToPage(t)}
+                        aria-current={isActive ? "page" : undefined}
+                        style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: 999,
+                          display: "grid",
+                          placeItems: "center",
+                          fontSize: 12,
+                          fontWeight: 800,
+                          color: "white",
+                          cursor: isActive ? "default" : "pointer",
+                          background: isActive
+                            ? "linear-gradient(135deg, rgba(109,40,217,.9) 0%, rgba(139,92,246,.85) 100%)"
+                            : "rgba(15,23,42,0.4)",
+                          border: isActive
+                            ? "1px solid rgba(139,92,246,0.85)"
+                            : "1px solid rgba(139,92,246,0.45)",
+                          boxShadow: isActive ? "0 8px 24px rgba(109,40,217,.35)" : "none",
+                          opacity: isActive ? 1 : 0.95,
+                        }}
+                        disabled={isActive}
+                        title={`Strona ${t}`}
+                      >
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* next */}
                 <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  type="button"
+                  onClick={() => goToPage(page + 1)}
                   disabled={page >= totalPages}
+                  title="Następna strona"
+                  aria-label="Następna strona"
                   style={{
-                    background: page >= totalPages ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.4)",
-                    border: "1px solid rgba(139,92,246,0.45)",
-                    color: "white",
+                    width: 36,
+                    height: 36,
                     borderRadius: 999,
-                    padding: "4px 12px",
-                    fontSize: 12,
+                    display: "grid",
+                    placeItems: "center",
+                    background: page >= totalPages ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.35)",
+                    border: "1px solid rgba(139,92,246,0.35)",
+                    color: page >= totalPages ? "rgba(154,164,178,0.55)" : "rgba(229,231,235,0.85)",
                     cursor: page >= totalPages ? "not-allowed" : "pointer",
-                    opacity: page >= totalPages ? 0.6 : 1,
+                    opacity: page >= totalPages ? 0.75 : 1,
+                    fontWeight: 700,
+                    fontSize: 16,
+                    lineHeight: 1,
                   }}
                 >
-                  Następne
+                  ›
                 </button>
               </div>
             )}
           </div>
 
           {/* prawa kolumna – mapa */}
-          <div className="card" style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: 12 }}>
+          <div
+            className="card"
+            style={{
+              display: "grid",
+              gridTemplateRows: "auto 1fr",
+              gap: 12,
+              alignSelf: "start",
+              position: "sticky",
+              top: 40,
+              height: "calc(100vh - 200px)",
+              minHeight: 480,
+              maxHeight: 700,
+            }}
+          >
             <div className="label" style={{ marginBottom: 0 }}>
               Mapa
             </div>
 
-            <div style={{ minHeight: 760 }}>
-              <ResultsMap
-                markers={pageItems
-                  .filter((x) => x.coords)
-                  .map((x, idx) => {
-                    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                    const label = idx < letters.length ? letters[idx] : `#${idx + 1}`;
+            <ResultsMap
+              markers={pageItems
+                .filter((x) => x.coords)
+                .map((x, idx) => {
+                  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                  const label = idx < letters.length ? letters[idx] : `#${idx + 1}`;
 
-                    return {
-                      id: x.id,
-                      lat: x.coords!.lat,
-                      lon: x.coords!.lon,
-                      title: x.title,
-                      label,
-                    };
-                  })}
-                onMarkerClick={(id) => {
-                  navigate(`/listing/${id}${search}`);
-                }}
-              />
-            </div>
+                  return {
+                    id: x.id,
+                    lat: x.coords!.lat,
+                    lon: x.coords!.lon,
+                    title: x.title,
+                    label,
+                  };
+                })}
+              onMarkerClick={(id) => {
+                navigate(`/listing/${id}${search}`);
+              }}
+            />
           </div>
         </div>
       ) : null}

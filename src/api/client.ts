@@ -117,7 +117,7 @@ function toNumberOrZero(v: string | number | null | undefined): number {
 
 function buildTitle(a: ApartmentApi): string {
   const city = a.city ?? "mieszkanie";
-  if (a.room_num && a.room_num > 0) return `${a.room_num}-pokojowe, ${city}`;
+  if (a.room_num && a.room_num > 0) return `Mieszkanie ${a.room_num}-pokojowe, ${city}`;
   return `Mieszkanie, ${city}`;
 }
 
