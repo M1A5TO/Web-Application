@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchListings } from "../api/client";
+import { fetchListings, fetchApartmentsCount } from "../api/client";
 import type { Listing } from "../api/types";
 import ListingCard from "../components/ListingCard";
 import ResultsMap from "../components/ResultsMap";
@@ -45,8 +45,8 @@ function buildStreetLabelFromNominatim(j: NominatimResponse | null): string | nu
   const house = a.house_number ? ` ${a.house_number}` : "";
   const city = a.city || a.town || a.village || a.municipality || a.county;
 
-  if (road && city) return `${road}${house} • ${city}`;
-  if (road) return `${road}${house}`;
+  if (road && city) return `ul. ${road}${house} • ${city}`;
+  if (road) return `ul. ${road}${house}`;
   if (city) return city;
 
   if (j.display_name) {
@@ -80,7 +80,9 @@ export default function Results() {
   const [sort, setSort] = useState<SortKey>("relevance");
 
   // how many offers we want cached client-side
-  const [targetCount, setTargetCount] = useState<100 | 250 | 500 | 1000>(100);
+  const [targetCount, setTargetCount] = useState<number>(100);
+  const [availableCount, setAvailableCount] = useState<number | null>(null);
+  const [countError, setCountError] = useState<string | null>(null);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
 
   const [items, setItems] = useState<Listing[]>([]);
@@ -103,6 +105,33 @@ export default function Results() {
     setItems([]);
     setGeoById({});
     setError(null);
+    setAvailableCount(null);
+    setCountError(null);
+  }, [location, profile, priceMax, areaMin, maxDistanceKm]);
+
+  // fetch total count for current filters
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setCountError(null);
+        const n = await fetchApartmentsCount({
+          location,
+          profile: profile as any,
+          priceMax,
+          areaMin,
+          maxDistanceKm,
+        });
+        if (!cancelled) setAvailableCount(n);
+      } catch (e) {
+        if (!cancelled) setCountError((e as any)?.message ?? "Błąd pobierania liczby ofert");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [location, profile, priceMax, areaMin, maxDistanceKm]);
 
   // progressively load offers up to targetCount
@@ -111,8 +140,11 @@ export default function Results() {
     let cancelled = false;
 
     async function run() {
+      const effectiveTarget =
+        availableCount != null ? Math.min(targetCount, availableCount) : targetCount;
+
       // if we already have enough cached, nothing to do
-      if (items.length >= targetCount) {
+      if (items.length >= effectiveTarget) {
         setLoading(false);
         setIsFetchingMore(false);
         return;
@@ -125,9 +157,9 @@ export default function Results() {
         const batchSize = 100; // API default, fewer roundtrips
         let loaded = items.length;
 
-        while (!cancelled && fetchRunId.current === myRun && loaded < targetCount) {
+        while (!cancelled && fetchRunId.current === myRun && loaded < effectiveTarget) {
           const skip = loaded;
-          const limit = Math.min(batchSize, targetCount - loaded);
+          const limit = Math.min(batchSize, effectiveTarget - loaded);
 
           const batch = await fetchListings(
             {
@@ -188,7 +220,7 @@ export default function Results() {
     };
     // re-run when targetCount or filters change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetCount, location, profile, priceMax, areaMin, maxDistanceKm]);
+  }, [targetCount, availableCount, location, profile, priceMax, areaMin, maxDistanceKm]);
 
   const sorted = useMemo(() => {
     if (sort === "relevance") return items; // preserve API order
@@ -205,6 +237,49 @@ export default function Results() {
   const start = (page - 1) * pageSize;
   const end = start + pageSize;
   const pageItems = sorted.slice(start, end);
+
+  function goToPage(p: number) {
+    const next = Math.max(1, Math.min(totalPages, p));
+    setPage(next);
+    // UX: po zmianie strony wracamy do góry listy
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  type PagerToken = number | "ellipsis";
+
+  function buildPagerTokens(current: number, total: number): PagerToken[] {
+    if (total <= 1) return [1];
+
+    // For small totals show everything
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+
+    const tokens: PagerToken[] = [];
+    const push = (t: PagerToken) => {
+      if (tokens.length === 0 || tokens[tokens.length - 1] !== t) tokens.push(t);
+    };
+
+    const addRange = (a: number, b: number) => {
+      for (let i = a; i <= b; i++) push(i);
+    };
+
+    // Always show first
+    push(1);
+
+    // Window around current
+    const left = Math.max(2, current - 1);
+    const right = Math.min(total - 1, current + 1);
+
+    if (left > 2) push("ellipsis");
+    addRange(left, right);
+    if (right < total - 1) push("ellipsis");
+
+    // Always show last
+    push(total);
+
+    return tokens;
+  }
+
+  const pagerTokens = useMemo(() => buildPagerTokens(page, totalPages), [page, totalPages]);
 
   // Reverse geocoding dla bieżącej strony (tylko brakujące ID, z cache)
   useEffect(() => {
@@ -261,8 +336,28 @@ export default function Results() {
             {areaMin ? ` • Metraż ≥ ${areaMin} m²` : ""}
             {/* maxDistanceKm removed from UI but kept for backward compatibility */}
           </div>
-          <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            Wczytane oferty: <b style={{ color: "var(--text)" }}>{sorted.length}</b>
+          <div
+            style={{
+              color: "var(--muted)",
+              fontSize: 12,
+              marginTop: 4,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <span>
+              Wczytane oferty:&nbsp;<b style={{ color: "var(--text)" }}>{sorted.length}</b>
+            </span>
+
+            {availableCount != null ? (
+              <span>
+                Dostępne oferty:&nbsp;<b style={{ color: "var(--text)" }}>{availableCount}</b>
+              </span>
+            ) : null}
+
+            {countError ? <span style={{ color: "#fca5a5" }}>• {countError}</span> : null}
             {isFetchingMore ? (
               <>
                 <span>• wczytywanie ofert…</span>
@@ -280,16 +375,21 @@ export default function Results() {
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 600 }}>Oferty:</span>
             <select
-              value={targetCount}
-              onChange={(e) => setTargetCount(Number(e.target.value) as any)}
+              value={String(targetCount)}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "ALL") setTargetCount(Number.MAX_SAFE_INTEGER);
+                else setTargetCount(Number(v));
+              }}
               className="select"
-              style={{ minWidth: 120 }}
+              style={{ minWidth: 160 }}
               title="Ile ofert wczytać do sortowania i przeglądania"
             >
               <option value={100}>100</option>
               <option value={250}>250</option>
               <option value={500}>500</option>
               <option value={1000}>1000</option>
+              <option value="ALL">Wszystkie</option>
             </select>
           </div>
 
@@ -351,7 +451,7 @@ export default function Results() {
           className="grid-results"
           style={{
             gridTemplateColumns: "1fr 1fr",
-            alignItems: "stretch",
+            alignItems: "start",
             gap: 12,
           }}
         >
@@ -369,75 +469,157 @@ export default function Results() {
             })}
 
             {totalPages > 1 && (
-              <div style={{ display: "flex", gap: 8, marginTop: 4, flexWrap: "wrap" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  marginTop: 4,
+                  flexWrap: "wrap",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+                aria-label="Paginacja"
+              >
+                {/* prev */}
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  type="button"
+                  onClick={() => goToPage(page - 1)}
                   disabled={page === 1}
+                  title="Poprzednia strona"
+                  aria-label="Poprzednia strona"
                   style={{
-                    background: page === 1 ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.4)",
-                    border: "1px solid rgba(139,92,246,0.45)",
-                    color: "white",
+                    width: 36,
+                    height: 36,
                     borderRadius: 999,
-                    padding: "4px 12px",
-                    fontSize: 12,
+                    display: "grid",
+                    placeItems: "center",
+                    background: page === 1 ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.35)",
+                    border: "1px solid rgba(139,92,246,0.35)",
+                    color: page === 1 ? "rgba(154,164,178,0.55)" : "rgba(229,231,235,0.85)",
                     cursor: page === 1 ? "not-allowed" : "pointer",
-                    opacity: page === 1 ? 0.6 : 1,
+                    opacity: page === 1 ? 0.75 : 1,
+                    fontWeight: 700,
+                    fontSize: 16,
+                    lineHeight: 1,
                   }}
                 >
-                  Poprzednie
+                  ‹
                 </button>
 
-                <span style={{ alignSelf: "center", color: "var(--muted)", fontSize: 12 }}>
-                  Strona {page} / {totalPages}
-                </span>
+                {/* numbers */}
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {pagerTokens.map((t, i) => {
+                    if (t === "ellipsis") {
+                      return (
+                        <span key={`e-${i}`} style={{ color: "var(--muted)", padding: "0 4px" }}>
+                          …
+                        </span>
+                      );
+                    }
 
+                    const isActive = t === page;
+
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => goToPage(t)}
+                        aria-current={isActive ? "page" : undefined}
+                        style={{
+                          width: 36,
+                          height: 36,
+                          borderRadius: 999,
+                          display: "grid",
+                          placeItems: "center",
+                          fontSize: 12,
+                          fontWeight: 800,
+                          color: "white",
+                          cursor: isActive ? "default" : "pointer",
+                          background: isActive
+                            ? "linear-gradient(135deg, rgba(109,40,217,.9) 0%, rgba(139,92,246,.85) 100%)"
+                            : "rgba(15,23,42,0.4)",
+                          border: isActive
+                            ? "1px solid rgba(139,92,246,0.85)"
+                            : "1px solid rgba(139,92,246,0.45)",
+                          boxShadow: isActive ? "0 8px 24px rgba(109,40,217,.35)" : "none",
+                          opacity: isActive ? 1 : 0.95,
+                        }}
+                        disabled={isActive}
+                        title={`Strona ${t}`}
+                      >
+                        {t}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* next */}
                 <button
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  type="button"
+                  onClick={() => goToPage(page + 1)}
                   disabled={page >= totalPages}
+                  title="Następna strona"
+                  aria-label="Następna strona"
                   style={{
-                    background: page >= totalPages ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.4)",
-                    border: "1px solid rgba(139,92,246,0.45)",
-                    color: "white",
+                    width: 36,
+                    height: 36,
                     borderRadius: 999,
-                    padding: "4px 12px",
-                    fontSize: 12,
+                    display: "grid",
+                    placeItems: "center",
+                    background: page >= totalPages ? "rgba(15,23,42,0.25)" : "rgba(15,23,42,0.35)",
+                    border: "1px solid rgba(139,92,246,0.35)",
+                    color: page >= totalPages ? "rgba(154,164,178,0.55)" : "rgba(229,231,235,0.85)",
                     cursor: page >= totalPages ? "not-allowed" : "pointer",
-                    opacity: page >= totalPages ? 0.6 : 1,
+                    opacity: page >= totalPages ? 0.75 : 1,
+                    fontWeight: 700,
+                    fontSize: 16,
+                    lineHeight: 1,
                   }}
                 >
-                  Następne
+                  ›
                 </button>
               </div>
             )}
           </div>
 
           {/* prawa kolumna – mapa */}
-          <div className="card" style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: 12 }}>
+          <div
+            className="card"
+            style={{
+              display: "grid",
+              gridTemplateRows: "auto 1fr",
+              gap: 12,
+              alignSelf: "start",
+              position: "sticky",
+              top: 40,
+              height: "calc(100vh - 200px)",
+              minHeight: 480,
+              maxHeight: 700,
+            }}
+          >
             <div className="label" style={{ marginBottom: 0 }}>
               Mapa
             </div>
 
-            <div style={{ minHeight: 760 }}>
-              <ResultsMap
-                markers={pageItems
-                  .filter((x) => x.coords)
-                  .map((x, idx) => {
-                    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-                    const label = idx < letters.length ? letters[idx] : `#${idx + 1}`;
+            <ResultsMap
+              markers={pageItems
+                .filter((x) => x.coords)
+                .map((x, idx) => {
+                  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+                  const label = idx < letters.length ? letters[idx] : `#${idx + 1}`;
 
-                    return {
-                      id: x.id,
-                      lat: x.coords!.lat,
-                      lon: x.coords!.lon,
-                      title: x.title,
-                      label,
-                    };
-                  })}
-                onMarkerClick={(id) => {
-                  navigate(`/listing/${id}${search}`);
-                }}
-              />
-            </div>
+                  return {
+                    id: x.id,
+                    lat: x.coords!.lat,
+                    lon: x.coords!.lon,
+                    title: x.title,
+                    label,
+                  };
+                })}
+              onMarkerClick={(id) => {
+                navigate(`/listing/${id}${search}`);
+              }}
+            />
           </div>
         </div>
       ) : null}

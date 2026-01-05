@@ -39,12 +39,13 @@ function makeLetterIcon(label: string) {
       border-radius: 9999px;
       display: grid;
       place-items: center;
-      font-weight: 900;
+      font-weight: 800;
       font-size: 12px;
-      color: white;
-      background: radial-gradient(circle at 30% 30%, #a855f7 0%, #6d28d9 60%, #4c1d95 100%);
-      border: 1px solid rgba(255,255,255,.25);
-      box-shadow: 0 6px 16px rgba(0,0,0,.35);
+      color: #f8fafc;
+      background: radial-gradient(circle at 30% 30%, rgba(109,40,217,.55) 0%, rgba(76,29,149,.85) 55%, rgba(30,13,62,.95) 100%);
+      border: 1px solid rgba(139,92,246,.65);
+      box-shadow: 0 8px 22px rgba(0,0,0,.45);
+      text-shadow: 0 1px 2px rgba(0,0,0,.5);
     ">${label}</div>`,
     iconSize: [30, 30],
     iconAnchor: [15, 30],

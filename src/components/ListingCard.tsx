@@ -55,16 +55,21 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
         {markerLabel && (
           <span
             style={{
-              background: "linear-gradient(135deg, #6d28d9 0%, #8b5cf6 100%)",
+              background: "rgba(109,40,217,.12)",
+              border: "1px solid rgba(109,40,217,.55)",
               width: 26,
               height: 26,
               borderRadius: 999,
               display: "grid",
               placeItems: "center",
-              color: "white",
-              fontWeight: 700,
+              color: "#e5e7eb",
+              fontWeight: 800,
               fontSize: 13,
+              boxShadow: "0 6px 18px rgba(0,0,0,.25)",
+              backdropFilter: "blur(6px)",
+              WebkitBackdropFilter: "blur(6px)",
             }}
+            title={`Marker ${markerLabel}`}
           >
             {markerLabel}
           </span>

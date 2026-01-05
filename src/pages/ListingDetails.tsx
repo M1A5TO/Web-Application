@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { fetchListingById } from "../api/client";
 import type { ListingDetails } from "../api/types";
 import DetailMap from "../components/DetailMap";
+import { FiDollarSign, FiHome, FiMapPin } from "react-icons/fi";
 
 /** Normalizuje typ POI z bazy (obsługuje m.in. "tram_stop: tram_stop") */
 function normalizePoiType(raw?: string): string {
@@ -56,19 +57,19 @@ const POI_LABEL_PL: Record<string, string> = {
   playground: "Plac zabaw",
   park: "Park",
 
-  convenience: "Sklep (convenience)",
+  convenience: "Sklep",
   supermarket: "Supermarket",
   bakery: "Piekarnia",
   pharmacy: "Apteka",
   parcel_locker: "Paczkomat",
 
   school: "Szkoła",
-  kinder_childcare: "Przedszkole / opieka",
+  kinder_childcare: "Przedszkole",
   university: "Uczelnia",
   library: "Biblioteka",
 
-  clinic_hospital: "Przychodnia / szpital",
-  fitness_centre: "Siłownia / fitness",
+  clinic_hospital: "Obiekt medyczny",
+  fitness_centre: "Siłownia",
 
   veterinary: "Weterynarz",
   pet_shop: "Sklep zoologiczny",
@@ -145,14 +146,6 @@ function buildStreetLabelFromNominatim(j: NominatimResponse | null): string | nu
 
 /** ===== Zdjęcia: dociąganie meta po photo_ids (bez dopasowania po URL) ===== */
 type ApartmentApi = { style?: string | null; photo_ids?: number[] };
-type PhotoApi = {
-  id?: number;
-  link?: string;
-  photo_type?: string | null;
-  room_type?: string | null;
-  room_style?: string | null;
-  style?: string | null;
-};
 
 type GalleryItem = {
   id: number;
@@ -234,26 +227,6 @@ async function tryFetchFirst<T>(candidates: string[], signal?: AbortSignal): Pro
   throw lastErr ?? new Error("Fetch failed");
 }
 
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  worker: (item: T) => Promise<R>
-): Promise<R[]> {
-  const out: R[] = new Array(items.length);
-  let idx = 0;
-
-  const runners = Array.from({ length: Math.max(1, concurrency) }).map(async () => {
-    while (true) {
-      const my = idx++;
-      if (my >= items.length) break;
-      out[my] = await worker(items[my]);
-    }
-  });
-
-  await Promise.all(runners);
-  return out;
-}
-
 /** Labelki dla photo_type / room_type / style */
 function prettyPhotoType(x?: string | null): string | null {
   const v = (x ?? "").trim().toLowerCase();
@@ -289,7 +262,18 @@ function prettyRoomType(x?: string | null): string | null {
   const raw = (x ?? "").trim();
   if (!raw) return null;
   const key = raw.toLowerCase();
-  return ROOM_TYPE_PL[key] ?? raw;
+
+  // znane mapowania
+  const known = ROOM_TYPE_PL[key];
+  if (known) return known;
+
+  // fallback: klatka_schodowa / schody-wewnetrzne -> "klatka schodowa" / "schody wewnetrzne"
+  const normalized = raw
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized;
 }
 
 const STYLE_PL: Record<string, string> = {
@@ -329,8 +313,20 @@ const STYLE_PL: Record<string, string> = {
 function prettyStyle(x?: string | null): string | null {
   const raw = (x ?? "").trim();
   if (!raw) return null;
+
   const key = raw.toLowerCase();
-  return STYLE_PL[key] ?? raw;
+
+  // specjalne kategorie
+  if (key === "others" || key === "other" || key === "inny" || key === "inne") return "inny";
+
+  const mapped = STYLE_PL[key];
+  if (mapped) return mapped;
+
+  // fallback: np. "mid_century_modern" -> "mid century modern"
+  return raw
+    .replace(/[_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildPhotoHoverLabel(ph: GalleryItem): string {
@@ -346,10 +342,87 @@ function buildPhotoHoverLabel(ph: GalleryItem): string {
   return parts.join(" • ");
 }
 
+function shouldPrefixUl(label: string): boolean {
+  // Heurystyka: prefix "ul." tylko jeśli wygląda na ulicę.
+  // buildStreetLabelFromNominatim zwraca np. "Kwiatowa 12 • Reda" albo "Reda".
+  const s = String(label).trim();
+  if (!s) return false;
+  // jeśli jest separator "•" to część przed nim zwykle jest drogą
+  const left = s.split("•")[0]?.trim() ?? "";
+  // musi być jakaś nazwa drogi (litery) i nie może wyglądać jak samo miasto
+  // (dla samego miasta left==s, a często bez cyfr/skrótów drogowych)
+  const hasLetters = /[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż]/.test(left);
+  const hasStreetHint = /\d|\b(Al\.|Aleja|Aleje|Plac|Os\.|Osiedle|Rynek|Bulwar|Skwer)\b/i.test(left);
+
+  // Najprościej: jeśli jest "•" i lewa część nie jest pusta => traktuj jako ulica.
+  if (s.includes("•") && hasLetters) return true;
+
+  // Bez "•": prefixuj tylko jeśli widać numer lub typowe słowa ulic/placów.
+  return hasLetters && hasStreetHint;
+}
+
+function formatLocationLabel(label: string | null): string | null {
+  if (!label) return null;
+  const s = label.trim();
+  if (!s) return null;
+  return shouldPrefixUl(s) ? `ul. ${s}` : s;
+}
+
+function normalizeTokenLabel(x?: string | null): string {
+  return (x ?? "").trim();
+}
+
+function mapPoiDesc(x?: string | null): string | null {
+  const v = normalizeTokenLabel(x).toUpperCase();
+  if (!v) return null;
+  if (v === "HIGH") return "Wysoka dostępność usług";
+  if (v === "MEDIUM") return "Średnia dostępność usług";
+  if (v === "LOW") return "Niska dostępność usług";
+  return null;
+}
+
+function mapPriceDesc(x?: string | null): string | null {
+  const v = normalizeTokenLabel(x).toUpperCase();
+  if (!v) return null;
+  if (v === "CHEAP") return "Tanie mieszkanie";
+  if (v === "AVERAGE") return "Mieszkanie w średnim przedziale cenowym";
+  if (v === "EXPENSIVE") return "Drogie mieszkanie";
+  return null;
+}
+
+function mapSizeDesc(x?: string | null): string | null {
+  const v = normalizeTokenLabel(x).toUpperCase();
+  if (!v) return null;
+  if (v === "SMALL") return "Małe mieszkanie";
+  if (v === "MEDIUM") return "Średnie mieszkanie";
+  if (v === "LARGE") return "Duże mieszkanie";
+  return null;
+}
+
+function mapApartmentStyle(x?: string | null): string | null {
+  const v = normalizeTokenLabel(x).toUpperCase();
+  if (!v) return null;
+  // ALLOWED_STYLES: modern, classic, industrial, scandinavian, minimalist, vintage, other
+  if (v === "OTHER" || v === "OTHERS") return "inny";
+  if (v === "MODERN") return "nowoczesny";
+  if (v === "CLASSIC") return "tradycyjny";
+  if (v === "INDUSTRIAL") return "industrialny";
+  if (v === "SCANDINAVIAN") return "skandynawski";
+  if (v === "MINIMALIST") return "minimalistyczny";
+  if (v === "VINTAGE") return "vintage";
+  // fallback: pokaż surową wartość
+  return x?.trim() || null;
+}
+
 export default function ListingDetailsPage() {
   const { id = "" } = useParams();
   const { search } = useLocation();
   const navigate = useNavigate();
+
+  const selectedProfile = useMemo(() => {
+    const q = new URLSearchParams(search);
+    return (q.get("profile") ?? "uniwersalne") as any;
+  }, [search]);
 
   const [data, setData] = useState<ListingDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -362,6 +435,8 @@ export default function ListingDetailsPage() {
   const [galleryItems, setGalleryItems] = useState<GalleryItem[] | null>(null);
 
   const [hoveredPhoto, setHoveredPhoto] = useState<number | null>(null);
+  const [activePhoto, setActivePhoto] = useState<number | null>(null);
+  const [showAllPhotos, setShowAllPhotos] = useState(false);
 
   useEffect(() => {
     if (!id) {
@@ -415,7 +490,7 @@ export default function ListingDetailsPage() {
     return () => ctrl.abort();
   }, [data?.coords?.lat, data?.coords?.lon]);
 
-  // Dociąganie: apartament (style + photo_ids) oraz photos (link + photo_type + room_type + room_style)
+  // Dociąganie: apartament (style) – zdjęcia bierzemy z fetchListingById (photoItems)
   useEffect(() => {
     if (!id) return;
 
@@ -423,11 +498,9 @@ export default function ListingDetailsPage() {
 
     // null = ładowanie w toku / brak próby; [] = załadowane, ale pusto
     setStyleLabel(null);
-    setGalleryItems(null);
 
     const bases = getApiBases();
     const aptPaths = ["/apartments", "/apartaments"]; // obsłuż obie wersje
-    const photoPaths = ["/photos"];
 
     (async () => {
       try {
@@ -436,75 +509,43 @@ export default function ListingDetailsPage() {
 
         const aptStyle = prettyStyle(typeof apt.style === "string" ? apt.style : null);
         setStyleLabel(aptStyle);
-
-        const ids = Array.isArray(apt.photo_ids)
-          ? apt.photo_ids.map((x) => Number(x)).filter((x) => Number.isFinite(x))
-          : [];
-
-        if (!ids.length) {
-          setGalleryItems([]);
-          return;
-        }
-
-        const items = await mapWithConcurrency(ids, 6, async (pid) => {
-          const photoUrls = bases.flatMap((b) =>
-            photoPaths.map((p) => joinUrl(b, `${p}/${encodeURIComponent(String(pid))}`))
-          );
-
-          try {
-            const ph = await tryFetchFirst<PhotoApi>(photoUrls, ctrl.signal);
-            const url = typeof ph.link === "string" ? ph.link : "";
-            if (!url) return null;
-
-            return {
-              id: Number(ph.id ?? pid),
-              url,
-              photo_type: typeof ph.photo_type === "string" ? ph.photo_type : null,
-              room_type: typeof ph.room_type === "string" ? ph.room_type : null,
-              room_style: typeof ph.room_style === "string" ? ph.room_style : null,
-              style: typeof ph.style === "string" ? ph.style : null,
-            } as GalleryItem;
-          } catch {
-            return null;
-          }
-        });
-
-        // zachowujemy kolejność photo_ids
-        const clean = items.filter(Boolean) as GalleryItem[];
-        setGalleryItems(clean);
       } catch (e) {
         if ((e as any)?.name === "AbortError") return;
-        // finalnie: nie blokuj UI – pozwól spadać na data.photos
         setStyleLabel(null);
-        setGalleryItems([]);
       }
     })();
 
     return () => ctrl.abort();
   }, [id]);
 
-  /** Punkt mieszkania do mapy */
-  const listingPoint = useMemo(() => {
-    if (!data?.coords) return undefined;
-    return { lat: data.coords.lat, lon: data.coords.lon, title: data.title };
-  }, [data?.coords, data?.title]);
+  // Galeria: preferuj data.photoItems (z meta), fallback do data.photos (stringi)
+  useEffect(() => {
+    if (!data) {
+      setGalleryItems(null);
+      return;
+    }
 
-  /** Punkty POI do mapy (stara logika) */
-  const poiPoints = useMemo(() => {
-    return (data?.poi ?? [])
-      .filter((p) => !!(p as any).coords)
-      .map((p: any) => ({
-        lat: p.coords.lat,
-        lon: p.coords.lon,
-        name: p.name,
-        type: p.type,
-      }));
-  }, [data?.poi]);
+    const itemsFromMeta = Array.isArray((data as any).photoItems) ? ((data as any).photoItems as any[]) : [];
 
-  /** Galeria: preferuj photo_ids->photos, fallback do data.photos (stringi) */
-  const gallery = useMemo(() => {
-    // galleryItems === null => jeszcze ładujemy
-    if (galleryItems !== null && galleryItems.length > 0) return galleryItems;
+    if (itemsFromMeta.length > 0) {
+      const mapped = itemsFromMeta
+        .map((x) => {
+          const url = typeof x?.url === "string" ? x.url : "";
+          if (!url) return null;
+          return {
+            id: Number(x?.id ?? 0),
+            url,
+            photo_type: typeof x?.photo_type === "string" ? x.photo_type : null,
+            room_type: typeof x?.room_type === "string" ? x.room_type : null,
+            room_style: typeof x?.room_style === "string" ? x.room_style : null,
+            style: typeof x?.style === "string" ? x.style : null,
+          } as GalleryItem;
+        })
+        .filter(Boolean) as GalleryItem[];
+
+      setGalleryItems(mapped);
+      return;
+    }
 
     const urls = Array.isArray((data as any)?.photos) ? ((data as any).photos as any[]) : [];
     const fallback = urls
@@ -522,8 +563,33 @@ export default function ListingDetailsPage() {
       })
       .filter(Boolean) as GalleryItem[];
 
-    return fallback;
-  }, [galleryItems, data]);
+    setGalleryItems(fallback);
+  }, [data]);
+
+  /** Punkt mieszkania do mapy */
+  const listingPoint = useMemo(() => {
+    if (!data?.coords) return undefined;
+    return { lat: data.coords.lat, lon: data.coords.lon, title: data.title };
+  }, [data?.coords, data?.title]);
+
+  /** Punkty POI do mapy (stara logika) */
+  const poiPoints = useMemo(() => {
+    return (data?.poi ?? [])
+      .filter((p: any) => !!p?.coords)
+      .map((p: any) => ({
+        lat: p.coords.lat,
+        lon: p.coords.lon,
+        name: p.name,
+        type: p.type,
+        distanceM: p.distanceM,
+      }));
+  }, [data?.poi]);
+
+  /** Galeria: preferuj photo_ids->photos, fallback do data.photos (stringi) */
+  const gallery = useMemo(() => {
+    if (galleryItems && galleryItems.length > 0) return galleryItems;
+    return [] as GalleryItem[];
+  }, [galleryItems]);
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
@@ -540,16 +606,23 @@ export default function ListingDetailsPage() {
           >
             {data?.title ?? "Szczegóły oferty"}
           </div>
-          <div style={{ color: "var(--muted)", fontSize: 12 }}>{data?.address ?? ""}</div>
+          <div style={{ color: "var(--muted)", fontSize: 13, fontWeight: 600 }}>
+            {data?.address ?? ""}
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="button" onClick={() => navigate(-1)}>
-            ← Wróć
-          </button>
-          <Link className="button" to={`/results${search}`}>
+          <button
+            className="button button--outline"
+            onClick={() => {
+              // Prefer history back to preserve Results state (page/scroll/cached items).
+              // If user opened details directly (no history), fallback to results + query.
+              if (window.history.length > 1) navigate(-1);
+              else navigate(`/results${search}`);
+            }}
+          >
             Wróć do wyników
-          </Link>
+          </button>
         </div>
       </div>
 
@@ -561,19 +634,51 @@ export default function ListingDetailsPage() {
           {!loading && !error && data && (
             <>
               <div>
-                <div style={{ color: "var(--muted)" }}>{data.address}</div>
-
-                <div style={{ marginTop: 6, display: "flex", gap: 14, alignItems: "baseline", flexWrap: "wrap" }}>
-                  <div style={{ fontSize: 18, fontWeight: 900 }}>
-                    {data.pricePln?.toLocaleString("pl-PL") ?? "—"} PLN
+                <div style={{ marginTop: 6, display: "grid", gap: 8 }}>
+                  {/* Cena */}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                    <div
+                      style={{
+                        fontSize: 20,
+                        fontWeight: 900,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 10,
+                      }}
+                    >
+                      <span aria-hidden="true" style={{ opacity: 0.85, display: "grid", placeItems: "center" }}>
+                        <FiDollarSign size={20} />
+                      </span>
+                      <span>{data.pricePln?.toLocaleString("pl-PL") ?? "—"} PLN</span>
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 700 }}>{data.areaM2 ?? "—"} m²</div>
 
+                  {/* Metraż */}
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+                    <div
+                      style={{
+                        fontWeight: 800,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 10,
+                      }}
+                    >
+                      <span aria-hidden="true" style={{ opacity: 0.85, display: "grid", placeItems: "center" }}>
+                        <FiHome size={20} />
+                      </span>
+                      <span>{data.areaM2 ?? "—"} m²</span>
+                    </div>
+                  </div>
+
+                  {/* Lokalizacja (pod metrażem) */}
                   {data.coords && (
-                    <div style={{ color: "var(--muted)" }}>
-                      <small>Lokalizacja:&nbsp;</small>
+                    <div style={{ color: "var(--muted)", display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                      <span aria-hidden="true" style={{ opacity: 0.85, display: "grid", placeItems: "center" }}>
+                        <FiMapPin size={18} />
+                      </span>
+
                       {geoLabel ? (
-                        <span style={{ fontWeight: 600 }}>{geoLabel}</span>
+                        <span style={{ fontWeight: 700 }}>{formatLocationLabel(geoLabel)}</span>
                       ) : geoLoading ? (
                         <span>ustalanie…</span>
                       ) : (
@@ -583,7 +688,7 @@ export default function ListingDetailsPage() {
                       )}
 
                       {styleLabel && (
-                        <div style={{ marginTop: 4, color: "var(--muted)", fontSize: 12 }}>
+                        <div style={{ width: "100%", marginTop: 2, color: "var(--muted)", fontSize: 12 }}>
                           <small>Styl:&nbsp;</small>
                           <span style={{ fontWeight: 700 }}>{styleLabel}</span>
                         </div>
@@ -595,79 +700,134 @@ export default function ListingDetailsPage() {
 
               {/* ZDJĘCIA */}
               <div>
-                <div className="label">Podgląd</div>
+                <div className="label">Podgląd i analiza zdjęć</div>
 
                 {galleryItems === null && (
-                  <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }}>Ładowanie metadanych zdjęć…</div>
+                  <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }}>Ładowanie zdjęć…</div>
                 )}
 
                 {gallery.length > 0 ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-                    {gallery.slice(0, 9).map((ph, i) => {
-                      const label = buildPhotoHoverLabel(ph);
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                      {(showAllPhotos ? gallery : gallery.slice(0, 9)).map((ph, i) => {
+                        const label = buildPhotoHoverLabel(ph);
+                        const isActive = (activePhoto ?? hoveredPhoto) === i;
+
+                        return (
+                          <a
+                            key={`${ph.id}-${ph.url}-${i}`}
+                            href={ph.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ display: "block" }}
+                            title={label}
+                            onMouseEnter={() => setHoveredPhoto(i)}
+                            onMouseLeave={() => setHoveredPhoto(null)}
+                            onFocus={() => setHoveredPhoto(i)}
+                            onBlur={() => setHoveredPhoto(null)}
+                            onClick={() => setActivePhoto(i)}
+                          >
+                            <div style={{ position: "relative" }}>
+                              <img
+                                src={ph.url}
+                                alt={`Zdjęcie ${i + 1}`}
+                                loading="lazy"
+                                referrerPolicy="no-referrer"
+                                style={{
+                                  width: "100%",
+                                  height: 120,
+                                  objectFit: "cover",
+                                  borderRadius: 12,
+                                  border: isActive
+                                    ? "1px solid rgba(139,92,246,0.85)"
+                                    : "1px solid var(--border)",
+                                  boxShadow: isActive ? "0 0 0 4px var(--ring)" : "none",
+                                  background: "var(--panel-2)",
+                                  display: "block",
+                                }}
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                                }}
+                              />
+
+                              {/* overlay removed: opis jest w panelu poniżej */}
+                            </div>
+                          </a>
+                        );
+                      })}
+                    </div>
+
+                    {/* Panel z informacjami: bez ucinania, bez nagłówka i numeru */}
+                    {(() => {
+                      const idx = activePhoto ?? hoveredPhoto;
+                      const ph = typeof idx === "number" ? (showAllPhotos ? gallery[idx] : gallery.slice(0, 9)[idx]) : null;
+                      if (!ph) return null;
+
+                      const typeLabel = prettyPhotoType(ph.photo_type) ?? "brak typu";
+                      const roomLabel = prettyRoomType(ph.room_type);
+                      const roomStyle = (ph.room_style ?? "").trim() || null;
+
+                      const rawType = (ph.photo_type ?? "").trim().toLowerCase();
+                      const isExterior = rawType === "exterior" || rawType === "non-interior";
 
                       return (
-                        <a
-                          key={`${ph.id}-${ph.url}-${i}`}
-                          href={ph.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ display: "block" }}
-                          title={label}
-                          onMouseEnter={() => setHoveredPhoto(i)}
-                          onMouseLeave={() => setHoveredPhoto(null)}
+                        <div
+                          className="card"
+                          style={{
+                            marginTop: 10,
+                            padding: 12,
+                            background: "rgba(17,24,39,0.35)",
+                            border: "1px solid rgba(139,92,246,0.25)",
+                          }}
                         >
-                          <div style={{ position: "relative" }}>
-                            <img
-                              src={ph.url}
-                              alt={`Zdjęcie ${i + 1}`}
-                              loading="lazy"
-                              referrerPolicy="no-referrer"
-                              style={{
-                                width: "100%",
-                                height: 120,
-                                objectFit: "cover",
-                                borderRadius: 12,
-                                border: "1px solid var(--border)",
-                                background: "var(--panel-2)",
-                                display: "block",
-                              }}
-                              onError={(e) => {
-                                (e.currentTarget as HTMLImageElement).style.display = "none";
-                              }}
-                            />
+                          <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+                            <div>
+                              <span style={{ color: "var(--muted)", fontWeight: 700 }}>Typ:&nbsp;</span>
+                              <span style={{ fontWeight: 800 }}>{typeLabel}</span>
+                            </div>
 
-                            {/* Overlay po hover: zawsze pokazuj (widoczny nawet gdy meta nie przyszła) */}
-                            {hoveredPhoto === i && (
-                              <div
-                                style={{
-                                  pointerEvents: "none",
-                                  position: "absolute",
-                                  left: 8,
-                                  right: 8,
-                                  bottom: 8,
-                                  padding: "6px 10px",
-                                  borderRadius: 999,
-                                  fontSize: 12,
-                                  fontWeight: 800,
-                                  background: "rgba(15,23,42,.78)",
-                                  border: "1px solid rgba(255,255,255,.14)",
-                                  color: "white",
-                                  backdropFilter: "blur(6px)",
-                                  WebkitBackdropFilter: "blur(6px)",
-                                  whiteSpace: "nowrap",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                }}
-                              >
-                                {label}
+                            {roomLabel && (
+                              <div>
+                                <span style={{ color: "var(--muted)", fontWeight: 700 }}>Pomieszczenie:&nbsp;</span>
+                                <span style={{ fontWeight: 800 }}>{roomLabel}</span>
+                              </div>
+                            )}
+
+                            {roomStyle && (
+                              <div>
+                                <span style={{ color: "var(--muted)", fontWeight: 700 }}>Styl pomieszczenia:&nbsp;</span>
+                                <span style={{ fontWeight: 800 }}>{roomStyle}</span>
+                              </div>
+                            )}
+
+                            {isExterior && (
+                              <div>
+                                <span style={{ color: "var(--muted)", fontWeight: 700 }}>Dodatkowy opis:&nbsp;</span>
+                                <span style={{ fontWeight: 700 }}>Zdjęcie nie podlega dokładnej analizie.</span>
                               </div>
                             )}
                           </div>
-                        </a>
+                        </div>
                       );
-                    })}
-                  </div>
+                    })()}
+
+                    {gallery.length > 9 && (
+                      <div style={{ marginTop: 10, display: "flex", justifyContent: "center" }}>
+                        <button
+                          type="button"
+                          className="button button--outline"
+                          onClick={() => {
+                            setShowAllPhotos((v) => !v);
+                            setHoveredPhoto(null);
+                            setActivePhoto(null);
+                          }}
+                          style={{ padding: "10px 14px" }}
+                        >
+                          {showAllPhotos ? "Pokaż mniej" : `Pokaż wszystkie (${gallery.length})`}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div
                     style={{
@@ -685,51 +845,141 @@ export default function ListingDetailsPage() {
                 )}
               </div>
 
-              {/* ALG-ROZ */}
+              {/* ATRAKCYJNOŚĆ */}
               <div>
-                <div className="label">Info z alg-roz</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
-                  {["Ogólna", "Dojazdy", "Zieleń", "Usługi"].map((k, i) => (
-                    <div key={k} className="card" style={{ padding: 12 }}>
-                      <div style={{ color: "var(--muted)", fontSize: 12 }}>{k}</div>
-                      <div style={{ fontSize: 18, fontWeight: 800 }}>
-                        {Math.round(((data.scores?.overall ?? 0.7) + i * 0.03) * 100)}%
+                <div className="label">Atrakcyjność mieszkania</div>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+                    gap: 8,
+                  }}
+                >
+                  {(
+                    [
+                      { key: "uniwersalne", value: data.scores?.overall, label: "Uniwersalny" },
+                      { key: "rodzina", value: data.scores?.family, label: "Rodzinny" },
+                      { key: "student", value: data.scores?.commute, label: "Student" },
+                      { key: "singiel", value: data.scores?.services, label: "Singiel" },
+                      { key: "wlasciciel_psa", value: data.scores?.green, label: "Właściciel psa" },
+                    ] as const
+                  ).map((x) => {
+                    const isSelected = selectedProfile === x.key;
+
+                    return (
+                      <div
+                        key={x.key}
+                        className="card"
+                        style={{
+                          padding: 12,
+                          borderColor: isSelected ? "rgba(139,92,246,0.95)" : undefined,
+                          boxShadow: isSelected ? "0 0 0 4px var(--ring)" : undefined,
+                        }}
+                        title={isSelected ? "Wybrany profil wyszukiwania" : undefined}
+                      >
+                        <div
+                          style={{
+                            color: "var(--muted)",
+                            fontSize: 12,
+                            whiteSpace: "normal",
+                            lineHeight: 1.15,
+                          }}
+                        >
+                          {x.label}
+                        </div>
+                        <div style={{ fontSize: 18, fontWeight: 900 }}>
+                          {x.value != null ? `${x.value}%` : "—"}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* SCRAPER */}
+              {/* SCRAPER + DODATKOWE INFO */}
               <div>
-                <div className="card" style={{ padding: 12 }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                    <div>
-                      <div>Źródło: {data.source?.scraper ?? "—"}</div>
-                    </div>
+                <div className="label">Dodatkowe informacje o mieszkaniu</div>
 
-                    {data.source?.url && (
-                      <a
-                        className="button"
-                        href={data.source.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          padding: "10px 14px",
-                          borderRadius: 12,
-                          fontWeight: 800,
-                          textTransform: "uppercase",
-                          letterSpacing: ".06em",
-                          fontSize: 12,
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        WYŚWIETL OFERTĘ
-                      </a>
-                    )}
+                <div className="card" style={{ padding: 12 }}>
+                  {/* Źródło + link (w tym samym stylu co reszta informacji) */}
+                  <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "160px 1fr",
+                        gap: 12,
+                        alignItems: "start",
+                      }}
+                    >
+                      <div style={{ color: "var(--muted)", fontWeight: 700, fontSize: 12, paddingTop: 2 }}>
+                        Źródło
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                        <div style={{ fontWeight: 700, lineHeight: 1 }}>{data.source?.scraper ?? "—"}</div>
+                        {data.source?.url && (
+                          <a
+                            className="button button--outline"
+                            href={data.source.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ padding: "6px 10px", borderRadius: 10, fontWeight: 800, fontSize: 12, lineHeight: 1 }}
+                          >
+                            Strona oferty
+                          </a>
+                        )}
+                      </div>
+                    </div>
                   </div>
 
-                  <div style={{ marginTop: 10, color: "var(--muted)" }}>
+                  {/* deskryptory */}
+                  {(() => {
+                    const poiText = mapPoiDesc(data.poiDesc ?? null);
+                    const priceText = mapPriceDesc(data.priceDesc ?? null);
+                    const sizeText = mapSizeDesc(data.sizeDesc ?? null);
+                    const aptStyle = mapApartmentStyle(data.apartmentStyle ?? null);
+                    const ppm2 = typeof data.pricePerM2Pln === "number" ? data.pricePerM2Pln : null;
+
+                    const rows: Array<{ label: string; value: string } | null> = [
+                      poiText ? { label: "Usługi", value: poiText } : null,
+                      priceText ? { label: "Cena", value: priceText } : null,
+                      sizeText ? { label: "Metraż", value: sizeText } : null,
+                      aptStyle ? { label: "Styl mieszkania", value: aptStyle } : null,
+                      ppm2 != null
+                        ? {
+                            label: "Cena za m²",
+                            value: `${Math.round(ppm2).toLocaleString("pl-PL")} zł/m²`,
+                          }
+                        : null,
+                    ];
+
+                    const visible = rows.filter(Boolean) as Array<{ label: string; value: string }>;
+                    if (visible.length === 0) {
+                      return <div style={{ color: "var(--muted)" }}>Brak dodatkowych informacji.</div>;
+                    }
+
+                    return (
+                      <div style={{ display: "grid", gap: 8 }}>
+                        {visible.map((r) => (
+                          <div
+                            key={r.label}
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "160px 1fr",
+                              gap: 12,
+                              alignItems: "start",
+                            }}
+                          >
+                            <div style={{ color: "var(--muted)", fontWeight: 700, fontSize: 12, paddingTop: 2 }}>
+                              {r.label}
+                            </div>
+                            <div style={{ fontWeight: 700, lineHeight: 1.25 }}>{r.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  <div style={{ marginTop: 12, color: "var(--muted)" }}>
                     {data.description ?? "Opis oferty pojawi się tutaj."}
                   </div>
                 </div>
@@ -737,16 +987,18 @@ export default function ListingDetailsPage() {
 
               {/* POI (sekundy -> min/sec) */}
               <div>
-                <div className="label">Najbliższe miejsca w okolicy</div>
-                <div className="card" style={{ padding: 12 }}>
+                <div className="label">Najbliższe usługi w okolicy</div>
+                <div style={{ color: "var(--muted)", fontSize: 12, fontWeight: 600, marginTop: -6 }}>
+                  oraz czasy dojścia pieszo
+                </div>
+                <div className="card" style={{ padding: 12, marginTop: 10 }}>
                   {(data.poi ?? []).length === 0 ? (
                     <div style={{ color: "var(--muted)" }}>Brak danych o miejscach w okolicy.</div>
                   ) : (
                     <ul style={{ margin: 0, paddingLeft: 16 }}>
                       {data.poi!.map((p, i) => (
                         <li key={i}>
-                          {poiEmoji((p as any).type)} {poiLabelPl((p as any).type)} —{" "}
-                          {formatSecondsAsMinSec((p as any).distanceM)}
+                          {poiEmoji((p as any).type)} {poiLabelPl((p as any).type)} — {formatSecondsAsMinSec((p as any).distanceM)}
                         </li>
                       ))}
                     </ul>
@@ -757,9 +1009,22 @@ export default function ListingDetailsPage() {
           )}
         </section>
 
-        <aside className="card" style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: 12 }}>
+        <aside
+          className="card"
+          style={{
+            display: "grid",
+            gridTemplateRows: "auto 1fr",
+            gap: 12,
+            alignSelf: "start",
+            position: "sticky",
+            top: 40,
+            height: "calc(100vh - 200px)",
+            minHeight: 480,
+            maxHeight: 900,
+          }}
+        >
           <div className="label">Mapa</div>
-          <div style={{ minHeight: 820 }}>
+          <div style={{ minHeight: 0 }}>
             <DetailMap listing={listingPoint} poi={poiPoints} />
           </div>
         </aside>

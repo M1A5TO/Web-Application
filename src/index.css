@@ -33,6 +33,21 @@ body {
 a{ color: var(--accent-2); text-decoration: none; }
 a:hover{ text-decoration: underline; }
 
+/* Header button: no underline/no movement, only highlight */
+.brand-nav .button,
+.brand-nav .button:hover,
+.brand-nav .button:active{
+  text-decoration: none;
+  transform: none;
+}
+
+.brand-nav .button--outline:hover{
+  background: rgba(139,92,246,0.16);
+  border-color: rgba(139,92,246,0.8);
+  /* keep it still */
+  transform: none;
+}
+
 .app-shell{min-height:100%;display:grid;grid-template-rows:auto 1fr auto}
 .app-header{
   padding:22px 20px;
@@ -139,6 +154,24 @@ a:hover{ text-decoration: underline; }
 }
 .button:hover{ transform: translateY(-1px); }
 .button:active{ transform: translateY(0); }
+
+/* Header-friendly variant (less dominant, works well on glass header) */
+.button--outline{
+  background: rgba(17,24,39,0.25);
+  color: var(--text);
+  border: 1px solid rgba(139,92,246,0.45);
+  box-shadow: none;
+}
+.button--outline:hover{
+  background: rgba(139,92,246,0.14);
+  border-color: rgba(139,92,246,0.7);
+  transform: translateY(-1px);
+}
+.button--outline:active{ transform: translateY(0); }
+.button--outline:focus-visible{
+  outline: none;
+  box-shadow: 0 0 0 4px var(--ring);
+}
 
 .miasto-marker__inner {
   background: linear-gradient(135deg, #6d28d9 0%, #8b5cf6 100%);

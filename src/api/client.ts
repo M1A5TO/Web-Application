@@ -109,16 +109,33 @@ function buildListUrl(params: SearchParams, paging?: ListPaging): string {
   return url.toString();
 }
 
+function buildCountUrl(params: SearchParams): string {
+  const url = new URL("/apartments/count", API_BASE_URL);
+
+  if (params.location) url.searchParams.set("city", params.location);
+  if (params.priceMax != null) url.searchParams.set("max_price", String(params.priceMax));
+  if (params.areaMin != null) url.searchParams.set("min_footage", String(params.areaMin));
+
+  // NOTE: endpoint mirrors GET /apartments filtering; profile is currently NOT listed in docs.
+  return url.toString();
+}
+
 function toNumberOrZero(v: string | number | null | undefined): number {
   if (v === null || v === undefined) return 0;
   const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
   return Number.isFinite(n) ? n : 0;
 }
 
+function toNumberOrUndefined(v: string | number | null | undefined): number | undefined {
+  if (v === null || v === undefined) return undefined;
+  const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
+  return Number.isFinite(n) ? n : undefined;
+}
+
 function buildTitle(a: ApartmentApi): string {
-  const city = a.city ?? "mieszkanie";
-  if (a.room_num && a.room_num > 0) return `${a.room_num}-pokojowe, ${city}`;
-  return `Mieszkanie, ${city}`;
+  // Tytuł bez dopisku miasta (miasto pokazujemy osobno jako address)
+  if (a.room_num && a.room_num > 0) return `Mieszkanie ${a.room_num}-pokojowe`;
+  return "Mieszkanie";
 }
 
 function pickProfileLabel(profile?: SearchParams["profile"]): ProfileType | undefined {
@@ -160,6 +177,14 @@ function distanceMeters(a: GeoPointApi, b: GeoPointApi): number {
   const x = sinΔφ * sinΔφ + Math.cos(φ1) * Math.cos(φ2) * sinΔλ * sinΔλ;
   const c = 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
   return R * c;
+}
+
+function toPercent0to100(v: number | null | undefined): number | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (!Number.isFinite(v)) return undefined;
+  // Backend might return either 0..1 or 0..100. Normalize to 0..100.
+  const scaled = v <= 1 ? v * 100 : v;
+  return Math.round(scaled);
 }
 
 /* ===== Zdjęcia: cache + fetch ===== */
@@ -247,6 +272,18 @@ export async function fetchListings(params: SearchParams, paging?: ListPaging): 
   });
 }
 
+export async function fetchApartmentsCount(params: SearchParams): Promise<number> {
+  const res = await fetch(buildCountUrl(params));
+  if (!res.ok) throw new Error(`Błąd API (count mieszkań) – HTTP ${res.status}`);
+
+  const json = await res.json();
+  // backend may return {count: number} or a raw number
+  if (typeof json === "number") return json;
+  if (json && typeof json.count === "number") return json.count;
+
+  throw new Error("Błędny format odpowiedzi /apartments/count");
+}
+
 export async function fetchListingById(id: string): Promise<ListingDetails> {
   const aptRes = await fetch(`${API_BASE_URL}/apartments/${id}`);
   if (!aptRes.ok) throw new Error(`Błąd API (szczegóły mieszkania) – HTTP ${aptRes.status}`);
@@ -280,16 +317,41 @@ export async function fetchListingById(id: string): Promise<ListingDetails> {
         };
       }) ?? [];
 
-  // ===== Zdjęcia: photo_ids -> /photos/{id} -> link =====
+  // ===== Zdjęcia: photo_ids -> /photos/{id} -> link (+ meta) =====
   const photoIds = Array.isArray(a.photo_ids) ? a.photo_ids : [];
-  const photoLinksRaw = await mapWithConcurrency(photoIds, 6, async (pid) => fetchPhotoLink(pid));
-  const photoLinks = photoLinksRaw.filter((x): x is string => typeof x === "string" && x.length > 0);
+
+  const photoOut = await mapWithConcurrency(photoIds, 6, async (pid) => {
+    if (!Number.isFinite(pid)) return null;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/photos/${pid}`, { method: "GET" });
+      if (!res.ok) return null;
+      const p: PhotoOutApi = await res.json();
+      const url = typeof p.link === "string" && p.link.length > 0 ? p.link : null;
+      if (!url) return null;
+
+      return {
+        id: Number(p.id ?? pid),
+        url,
+        photo_type: typeof p.photo_type === "string" ? p.photo_type : null,
+        room_type: typeof p.room_type === "string" ? p.room_type : null,
+        room_style: typeof p.room_style === "string" ? p.room_style : null,
+        style: typeof p.style === "string" ? p.style : null,
+      };
+    } catch {
+      return null;
+    }
+  });
+
+  const photoItems = photoOut.filter(Boolean) as NonNullable<ListingDetails["photoItems"]>;
+  const photoLinks = photoItems.map((x) => x.url);
 
   const scores = {
-    overall: a.universal_attractiveness ?? undefined,
-    commute: a.student_attractiveness ?? undefined,
-    green: a.dog_owner_attractiveness ?? undefined,
-    services: a.single_attractiveness ?? undefined,
+    overall: toPercent0to100(a.universal_attractiveness),
+    family: toPercent0to100(a.family_attractiveness),
+    commute: toPercent0to100(a.student_attractiveness),
+    services: toPercent0to100(a.single_attractiveness),
+    green: toPercent0to100(a.dog_owner_attractiveness),
   };
 
   return {
@@ -305,6 +367,7 @@ export async function fetchListingById(id: string): Promise<ListingDetails> {
 
     thumbnailUrl: photoLinks[0] ?? undefined,
     photos: photoLinks,
+    photoItems,
 
     description: a.description ?? undefined,
     scores,
@@ -313,5 +376,12 @@ export async function fetchListingById(id: string): Promise<ListingDetails> {
       url: a.source_url ?? undefined,
     },
     poi,
+
+    // dodatkowe pola z backendu
+    poiDesc: a.poi_desc ?? undefined,
+    priceDesc: a.price_desc ?? undefined,
+    sizeDesc: a.size_desc ?? undefined,
+    pricePerM2Pln: toNumberOrUndefined(a.price_per_m2),
+    apartmentStyle: a.style ?? undefined,
   };
 }

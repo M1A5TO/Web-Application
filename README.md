@@ -13,6 +13,12 @@ npm run dev
 ```
 Domyślnie Vite uruchomi aplikację pod adresem z terminala (zwykle `http://localhost:5173`).
 
+> Jeśli ktoś pobiera projekt pierwszy raz lub po zmianach w zależnościach (np. dodaniu nowej paczki jak `react-icons`), musi wykonać `npm install`.
+
+## Zależności (uwagi dla zespołu)
+- UI używa ikon z paczki `react-icons` (instalowanej przez `npm install`).
+- Dla powtarzalnych, identycznych instalacji między devami warto commitować plik lock (`package-lock.json`).
+
 ## Build (wersja produkcyjna)
 ```bash
 npm run build

@@ -1,10 +1,13 @@
-import { Routes, Route, Navigate, Link } from "react-router-dom";
+import { Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
 import Home from "./pages/Home";
 import Loading from "./pages/Loading";
 import Results from "./pages/Results";
 import ListingDetails from "./pages/ListingDetails"; // ⬅ nowy import
 
 export default function App() {
+  const { pathname } = useLocation();
+  const showSearchButton = pathname !== "/";
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -16,9 +19,13 @@ export default function App() {
             <div className="brand-sub">Serwis do wyszukiwania i oceniania mieszkań w koncepcji 15-minutowego miasta</div>
           </div>
 
-          <nav className="brand-nav">
-            <Link to="/">Wyszukiwanie</Link>
-          </nav>
+          {showSearchButton ? (
+            <nav className="brand-nav">
+              <Link to="/" className="button button--outline" style={{ padding: "8px 12px" }}>
+                Wyszukiwanie
+              </Link>
+            </nav>
+          ) : null}
         </div>
       </header>
 
