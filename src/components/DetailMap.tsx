@@ -12,8 +12,8 @@ L.Icon.Default.mergeOptions({
   shadowUrl: shadow,
 });
 
-type ListingMarker = { lat: number; lon: number; title?: string };
-type PoiMarker = { lat: number; lon: number; name: string; type?: string };
+type ListingMarker = { lat: number; lon: number };
+type PoiMarker = { lat: number; lon: number; name: string; type?: string; distanceM?: number };
 
 /**
  * Normalizuje typ POI z bazy:
@@ -41,7 +41,7 @@ const POI_META: Record<string, { pl: string; emoji: string }> = {
 
   // edukacja
   school: { pl: "Szkoła", emoji: "📚" },
-  kinder_childcare: { pl: "Przedszkole / opieka", emoji: "🧸" },
+  kinder_childcare: { pl: "Przedszkole", emoji: "🧸" },
   university: { pl: "Uczelnia", emoji: "🎓" },
   library: { pl: "Biblioteka", emoji: "📖" },
 
@@ -50,15 +50,15 @@ const POI_META: Record<string, { pl: string; emoji: string }> = {
   nightclub: { pl: "Klub", emoji: "🎉" },
 
   // zakupy / usługi
-  convenience: { pl: "Sklep (convenience)", emoji: "🛒" },
+  convenience: { pl: "Sklep", emoji: "🛒" },
   supermarket: { pl: "Supermarket", emoji: "🛒" },
   parcel_locker: { pl: "Paczkomat", emoji: "📦" },
   pharmacy: { pl: "Apteka", emoji: "💊" },
   bakery: { pl: "Piekarnia", emoji: "🥐" },
 
   // zdrowie / sport
-  clinic_hospital: { pl: "Przychodnia / szpital", emoji: "🏥" },
-  fitness_centre: { pl: "Siłownia / fitness", emoji: "🏋️" },
+  clinic_hospital: { pl: "Obiekt medyczny", emoji: "🏥" },
+  fitness_centre: { pl: "Siłownia", emoji: "🏋️" },
 
   // rekreacja
   park: { pl: "Park", emoji: "🌳" },
@@ -116,15 +116,14 @@ export default function DetailMap({
   const center: [number, number] = listing ? [listing.lat, listing.lon] : [52.2297, 21.0122];
 
   return (
-    <div style={{ height: "100%", minHeight: 760, borderRadius: 12, overflow: "hidden" }}>
-
+    <div style={{ height: "100%", borderRadius: 12, overflow: "hidden" }}>
       <MapContainer center={center} zoom={14} style={{ height: "100%", width: "100%" }}>
         <TileLayer attribution="&copy; OpenStreetMap" url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
         {/* mieszkanie */}
         {listing && (
           <Marker position={[listing.lat, listing.lon]} icon={listingIcon}>
-            <Popup>{listing.title ?? "Mieszkanie"}</Popup>
+            <Popup>Mieszkanie</Popup>
           </Marker>
         )}
 
@@ -147,14 +146,17 @@ export default function DetailMap({
             popupAnchor: [0, -20],
           });
 
+          const minutes = typeof p.distanceM === "number" && Number.isFinite(p.distanceM)
+            ? Math.max(0, Math.round(p.distanceM / 60))
+            : null;
+
           return (
             <Marker key={idx} position={[p.lat, p.lon]} icon={poiIcon}>
               <Popup>
-                <div style={{ fontWeight: 700 }}>{p.name}</div>
-                <div style={{ fontSize: 12, opacity: 0.8 }}>{labelPl}</div>
-                {/* jeśli chcesz debugować typ z bazy, odkomentuj:
-                <div style={{ fontSize: 11, opacity: 0.55 }}>{p.type}</div>
-                */}
+                <div style={{ fontWeight: 800 }}>{labelPl}</div>
+                {minutes != null ? (
+                  <div style={{ fontSize: 12, opacity: 0.8 }}>~{minutes} min pieszo</div>
+                ) : null}
               </Popup>
             </Marker>
           );
