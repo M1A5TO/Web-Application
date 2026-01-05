@@ -109,6 +109,17 @@ function buildListUrl(params: SearchParams, paging?: ListPaging): string {
   return url.toString();
 }
 
+function buildCountUrl(params: SearchParams): string {
+  const url = new URL("/apartments/count", API_BASE_URL);
+
+  if (params.location) url.searchParams.set("city", params.location);
+  if (params.priceMax != null) url.searchParams.set("max_price", String(params.priceMax));
+  if (params.areaMin != null) url.searchParams.set("min_footage", String(params.areaMin));
+
+  // NOTE: endpoint mirrors GET /apartments filtering; profile is currently NOT listed in docs.
+  return url.toString();
+}
+
 function toNumberOrZero(v: string | number | null | undefined): number {
   if (v === null || v === undefined) return 0;
   const n = typeof v === "number" ? v : Number(String(v).replace(",", "."));
@@ -259,6 +270,18 @@ export async function fetchListings(params: SearchParams, paging?: ListPaging): 
       thumbnailUrl: thumb ?? undefined,
     };
   });
+}
+
+export async function fetchApartmentsCount(params: SearchParams): Promise<number> {
+  const res = await fetch(buildCountUrl(params));
+  if (!res.ok) throw new Error(`Błąd API (count mieszkań) – HTTP ${res.status}`);
+
+  const json = await res.json();
+  // backend may return {count: number} or a raw number
+  if (typeof json === "number") return json;
+  if (json && typeof json.count === "number") return json.count;
+
+  throw new Error("Błędny format odpowiedzi /apartments/count");
 }
 
 export async function fetchListingById(id: string): Promise<ListingDetails> {

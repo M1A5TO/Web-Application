@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchListings } from "../api/client";
+import { fetchListings, fetchApartmentsCount } from "../api/client";
 import type { Listing } from "../api/types";
 import ListingCard from "../components/ListingCard";
 import ResultsMap from "../components/ResultsMap";
@@ -80,7 +80,9 @@ export default function Results() {
   const [sort, setSort] = useState<SortKey>("relevance");
 
   // how many offers we want cached client-side
-  const [targetCount, setTargetCount] = useState<100 | 250 | 500 | 1000>(100);
+  const [targetCount, setTargetCount] = useState<number>(100);
+  const [availableCount, setAvailableCount] = useState<number | null>(null);
+  const [countError, setCountError] = useState<string | null>(null);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
 
   const [items, setItems] = useState<Listing[]>([]);
@@ -103,6 +105,33 @@ export default function Results() {
     setItems([]);
     setGeoById({});
     setError(null);
+    setAvailableCount(null);
+    setCountError(null);
+  }, [location, profile, priceMax, areaMin, maxDistanceKm]);
+
+  // fetch total count for current filters
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setCountError(null);
+        const n = await fetchApartmentsCount({
+          location,
+          profile: profile as any,
+          priceMax,
+          areaMin,
+          maxDistanceKm,
+        });
+        if (!cancelled) setAvailableCount(n);
+      } catch (e) {
+        if (!cancelled) setCountError((e as any)?.message ?? "Błąd pobierania liczby ofert");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [location, profile, priceMax, areaMin, maxDistanceKm]);
 
   // progressively load offers up to targetCount
@@ -111,8 +140,11 @@ export default function Results() {
     let cancelled = false;
 
     async function run() {
+      const effectiveTarget =
+        availableCount != null ? Math.min(targetCount, availableCount) : targetCount;
+
       // if we already have enough cached, nothing to do
-      if (items.length >= targetCount) {
+      if (items.length >= effectiveTarget) {
         setLoading(false);
         setIsFetchingMore(false);
         return;
@@ -125,9 +157,9 @@ export default function Results() {
         const batchSize = 100; // API default, fewer roundtrips
         let loaded = items.length;
 
-        while (!cancelled && fetchRunId.current === myRun && loaded < targetCount) {
+        while (!cancelled && fetchRunId.current === myRun && loaded < effectiveTarget) {
           const skip = loaded;
-          const limit = Math.min(batchSize, targetCount - loaded);
+          const limit = Math.min(batchSize, effectiveTarget - loaded);
 
           const batch = await fetchListings(
             {
@@ -188,7 +220,7 @@ export default function Results() {
     };
     // re-run when targetCount or filters change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetCount, location, profile, priceMax, areaMin, maxDistanceKm]);
+  }, [targetCount, availableCount, location, profile, priceMax, areaMin, maxDistanceKm]);
 
   const sorted = useMemo(() => {
     if (sort === "relevance") return items; // preserve API order
@@ -304,8 +336,28 @@ export default function Results() {
             {areaMin ? ` • Metraż ≥ ${areaMin} m²` : ""}
             {/* maxDistanceKm removed from UI but kept for backward compatibility */}
           </div>
-          <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            Wczytane oferty: <b style={{ color: "var(--text)" }}>{sorted.length}</b>
+          <div
+            style={{
+              color: "var(--muted)",
+              fontSize: 12,
+              marginTop: 4,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              flexWrap: "wrap",
+            }}
+          >
+            <span>
+              Wczytane oferty:&nbsp;<b style={{ color: "var(--text)" }}>{sorted.length}</b>
+            </span>
+
+            {availableCount != null ? (
+              <span>
+                Dostępne oferty:&nbsp;<b style={{ color: "var(--text)" }}>{availableCount}</b>
+              </span>
+            ) : null}
+
+            {countError ? <span style={{ color: "#fca5a5" }}>• {countError}</span> : null}
             {isFetchingMore ? (
               <>
                 <span>• wczytywanie ofert…</span>
@@ -323,16 +375,21 @@ export default function Results() {
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <span style={{ fontSize: 14, color: "var(--muted)", fontWeight: 600 }}>Oferty:</span>
             <select
-              value={targetCount}
-              onChange={(e) => setTargetCount(Number(e.target.value) as any)}
+              value={String(targetCount)}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "ALL") setTargetCount(Number.MAX_SAFE_INTEGER);
+                else setTargetCount(Number(v));
+              }}
               className="select"
-              style={{ minWidth: 120 }}
+              style={{ minWidth: 160 }}
               title="Ile ofert wczytać do sortowania i przeglądania"
             >
               <option value={100}>100</option>
               <option value={250}>250</option>
               <option value={500}>500</option>
               <option value={1000}>1000</option>
+              <option value="ALL">Wszystkie</option>
             </select>
           </div>
 
