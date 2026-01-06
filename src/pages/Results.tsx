@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { fetchListings, fetchApartmentsCount } from "../api/client";
 import type { Listing } from "../api/types";
 import ListingCard from "../components/ListingCard";
@@ -57,6 +57,35 @@ function buildStreetLabelFromNominatim(j: NominatimResponse | null): string | nu
   return null;
 }
 
+function buildCanonicalResultsKey(search: string): string {
+  const q = new URLSearchParams(search);
+
+  // normalize known params
+  const get = (k: string) => (q.get(k) ?? "").trim();
+  const normNum = (k: string) => {
+    const v = get(k);
+    if (!v) return "";
+    const n = Number(v);
+    return Number.isFinite(n) ? String(n) : v;
+  };
+
+  const parts: Array<[string, string]> = [
+    ["location", get("location")],
+    ["profile", get("profile")],
+    ["priceMax", normNum("priceMax")],
+    ["areaMin", normNum("areaMin")],
+    ["maxDistanceKm", normNum("maxDistanceKm")],
+  ];
+
+  // stable order + omit empties
+  const encoded = parts
+    .filter(([, v]) => v !== "")
+    .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+    .join("&");
+
+  return `resultsState:v1:${encoded}`;
+}
+
 export default function Results() {
   const { search } = useLocation();
   const q = new URLSearchParams(search);
@@ -81,6 +110,7 @@ export default function Results() {
 
   // how many offers we want cached client-side
   const [targetCount, setTargetCount] = useState<number>(100);
+  const [lastLoadedTarget, setLastLoadedTarget] = useState<number>(0);
   const [availableCount, setAvailableCount] = useState<number | null>(null);
   const [countError, setCountError] = useState<string | null>(null);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
@@ -99,18 +129,214 @@ export default function Results() {
   // cancel/background run guard
   const fetchRunId = useRef(0);
 
-  // reset when filters change
+  // persist/restore key per filters (canonicalized)
+  const stateKey = useMemo(() => buildCanonicalResultsKey(search), [search]);
+  const legacyKey = useMemo(() => `resultsState:${search}`, [search]);
+  // NOTE: avoid a global fallback cache; it can restore unrelated queries and "poison" the UI.
+
+  // whether we have attempted restoring state for this query (gates effects)
+  const [hydrated, setHydrated] = useState(false);
+
+  // remember if we restored from cache (skip initial fetch)
+  const restoredRef = useRef(false);
+
+  // If we have a cached state for this query (even if items are empty), don't immediately kick off a new run.
+  // This prevents "restore skipped (no items)" -> refetch loop when an earlier empty save exists.
+  const restoredAnyRef = useRef(false);
+
+  // Keep track if we've ever saved a non-empty items cache for this key.
+  const hasNonEmptyCacheRef = useRef(false);
+
+  const DEBUG = (import.meta as any).env?.DEV === true;
+
+  // restore cached state on first mount for this query (before paint)
+  useLayoutEffect(() => {
+    restoredRef.current = false;
+    restoredAnyRef.current = false;
+    setHydrated(false);
+
+    try {
+      const raw = sessionStorage.getItem(stateKey) || sessionStorage.getItem(legacyKey);
+
+      if (DEBUG) {
+        console.log("[Results] restore", {
+          search,
+          stateKey,
+          legacyKey,
+          hasStateKey: !!sessionStorage.getItem(stateKey),
+          hasLegacyKey: !!sessionStorage.getItem(legacyKey),
+          rawBytes: raw ? raw.length : 0,
+        });
+      }
+
+      if (!raw) {
+        // No cached state for this query -> show loading and allow fetch effect to run.
+        setLoading(true);
+        setHydrated(true);
+        return;
+      }
+
+      const parsed = JSON.parse(raw) as any;
+      restoredAnyRef.current = true;
+
+      if (DEBUG) {
+        console.log("[Results] parsed", {
+          itemsLen: Array.isArray(parsed?.items) ? parsed.items.length : null,
+          page: parsed?.page,
+          sort: parsed?.sort,
+          targetCount: parsed?.targetCount,
+          availableCount: parsed?.availableCount,
+          ts: parsed?.ts,
+        });
+      }
+
+      if (Array.isArray(parsed?.items) && parsed.items.length > 0) {
+        hasNonEmptyCacheRef.current = true;
+      }
+
+      // TTL: 10 minutes (avoid very stale cache)
+      const ts = typeof parsed.ts === "number" ? parsed.ts : 0;
+      if (ts && Date.now() - ts > 10 * 60 * 1000) {
+        sessionStorage.removeItem(stateKey);
+        sessionStorage.removeItem(legacyKey);
+        setLoading(true);
+        setHydrated(true);
+        return;
+      }
+
+      // Restore even if items array is empty (it's still useful for paging/sort/targetCount/scroll).
+      if (Array.isArray(parsed.items)) {
+        setItems(parsed.items);
+        setLastLoadedTarget(Array.isArray(parsed.items) ? parsed.items.length : 0);
+        setPage(typeof parsed.page === "number" ? parsed.page : 1);
+        setSort((parsed.sort as SortKey) ?? "relevance");
+        setTargetCount(typeof parsed.targetCount === "number" ? parsed.targetCount : 100);
+        // allow 0 too
+        setAvailableCount(
+          typeof parsed.availableCount === "number" ? parsed.availableCount : null
+        );
+        setGeoById(parsed.geoById ?? {});
+        setError(null);
+        setCountError(null);
+
+        if (parsed.items.length > 0) {
+          setLoading(false);
+          setIsFetchingMore(false);
+          restoredRef.current = true;
+        } else {
+          // Empty cache -> treat as no cache (fetch will run)
+          setLoading(true);
+        }
+
+        if (DEBUG) {
+          console.log("[Results] restored state (any)", {
+            itemsLen: parsed.items.length,
+            restored: restoredRef.current,
+          });
+        }
+
+        const y = typeof parsed.scrollY === "number" ? parsed.scrollY : 0;
+        // restore scroll synchronously as we are in layout effect
+        window.scrollTo({ top: y, behavior: "auto" });
+      } else {
+        if (DEBUG) {
+          console.log("[Results] restore skipped (items missing)");
+        }
+        setLoading(true);
+      }
+    } catch (e) {
+      if (DEBUG) console.warn("[Results] restore error", e);
+      setLoading(true);
+    } finally {
+      setHydrated(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateKey, legacyKey]);
+
+  // save state helper (debounced-ish)
+  const saveTimer = useRef<number | null>(null);
+  function saveState(scrollY?: number, opts?: { forceStateKey?: boolean }) {
+    try {
+      const payload = {
+        items,
+        page,
+        sort,
+        targetCount,
+        availableCount,
+        geoById,
+        scrollY: typeof scrollY === "number" ? scrollY : window.scrollY,
+        ts: Date.now(),
+      };
+      const raw = JSON.stringify(payload);
+
+      const itemsLen = items.length;
+
+      // Never overwrite a good (non-empty) cache with an empty one.
+      const shouldWriteStateKey =
+        opts?.forceStateKey === true || itemsLen > 0;
+
+      if (shouldWriteStateKey) {
+        sessionStorage.setItem(stateKey, raw);
+        if (itemsLen > 0) hasNonEmptyCacheRef.current = true;
+      }
+
+      if (DEBUG) {
+        console.log("[Results] saved", {
+          stateKey,
+          wroteStateKey: shouldWriteStateKey,
+          itemsLen,
+          page,
+          sort,
+          targetCount,
+          availableCount,
+          scrollY: typeof scrollY === "number" ? scrollY : window.scrollY,
+        });
+      }
+    } catch (e) {
+      if (DEBUG) console.warn("[Results] save error", e);
+    }
+  }
+
+  // save periodically when state changes (avoid hammering storage)
   useEffect(() => {
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(() => saveState(), 250);
+    return () => {
+      if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, page, sort, targetCount, availableCount, geoById, stateKey]);
+
+  // save on unmount / pagehide (back navigation)
+  useEffect(() => {
+    const onPageHide = () => saveState();
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      saveState();
+      window.removeEventListener("pagehide", onPageHide);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateKey]);
+
+  // reset when filters change (after hydration)
+  useEffect(() => {
+    if (!hydrated) return;
+    // If we restored from cache for the same query, don't wipe state.
+    if (restoredRef.current) return;
+
     setPage(1);
     setItems([]);
+    setLastLoadedTarget(0);
     setGeoById({});
     setError(null);
     setAvailableCount(null);
     setCountError(null);
-  }, [location, profile, priceMax, areaMin, maxDistanceKm]);
+  }, [hydrated, location, profile, priceMax, areaMin, maxDistanceKm]);
 
-  // fetch total count for current filters
+  // fetch total count for current filters (after hydration)
   useEffect(() => {
+    if (!hydrated) return;
+
     let cancelled = false;
 
     (async () => {
@@ -132,10 +358,25 @@ export default function Results() {
     return () => {
       cancelled = true;
     };
-  }, [location, profile, priceMax, areaMin, maxDistanceKm]);
+  }, [hydrated, location, profile, priceMax, areaMin, maxDistanceKm]);
 
-  // progressively load offers up to targetCount
+  // progressively load offers up to targetCount (after hydration)
   useEffect(() => {
+    if (!hydrated) return;
+
+    // If we restored, only skip fetching when we already have enough items for the current target.
+    // Otherwise allow loading more when the user increases targetCount.
+    if (restoredRef.current && items.length > 0) {
+      const effectiveTarget =
+        availableCount != null ? Math.min(targetCount, availableCount) : targetCount;
+      if (items.length >= effectiveTarget) {
+        if (DEBUG) console.log("[Results] skip fetch (restored, enough items)", { itemsLen: items.length, effectiveTarget });
+        setLoading(false);
+        setIsFetchingMore(false);
+        return;
+      }
+    }
+
     const myRun = ++fetchRunId.current;
     let cancelled = false;
 
@@ -147,6 +388,7 @@ export default function Results() {
       if (items.length >= effectiveTarget) {
         setLoading(false);
         setIsFetchingMore(false);
+        setLastLoadedTarget(Math.max(lastLoadedTarget, items.length));
         return;
       }
 
@@ -193,10 +435,9 @@ export default function Results() {
             return merged;
           });
 
-          // update local loaded count (use batch length as upper-bound, but rely on appended when possible)
           loaded += Math.max(appended, batch.length);
+          setLastLoadedTarget((prev) => Math.max(prev, loaded));
 
-          // if API returned fewer than requested => likely end
           if (batch.length < limit) break;
 
           await new Promise((r) => setTimeout(r, 0));
@@ -220,7 +461,7 @@ export default function Results() {
     };
     // re-run when targetCount or filters change
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [targetCount, availableCount, location, profile, priceMax, areaMin, maxDistanceKm]);
+  }, [hydrated, targetCount, availableCount, location, profile, priceMax, areaMin, maxDistanceKm, lastLoadedTarget]);
 
   const sorted = useMemo(() => {
     if (sort === "relevance") return items; // preserve API order
@@ -462,8 +703,23 @@ export default function Results() {
               const markerLabel = idx < letters.length ? letters[idx] : `#${idx + 1}`;
 
               return (
-                <Link key={l.id} to={`/listing/${l.id}${search}`} style={{ textDecoration: "none", color: "inherit" }}>
-                  <ListingCard listing={l} markerLabel={markerLabel} locationLabel={geoById[l.id]} />
+                <Link
+                  key={l.id}
+                  to={`/listing/${l.id}${search}`}
+                  style={{ textDecoration: "none", color: "inherit" }}
+                  onClickCapture={() => {
+                    // Ensure we persist a snapshot before navigating away.
+                    // Force writing to the canonical key so back navigation can restore.
+                    saveState(undefined, { forceStateKey: true });
+                  }}
+                >
+                  {/* Prevent nested anchors: ListingCard can render an <a> to Google Maps. */}
+                  <ListingCard
+                    listing={l}
+                    markerLabel={markerLabel}
+                    locationLabel={geoById[l.id]}
+                    disableInternalLinks
+                  />
                 </Link>
               );
             })}

@@ -244,7 +244,7 @@ const ROOM_TYPE_PL: Record<string, string> = {
   "pokoj dzieciecy": "pokój dziecięcy",
   sypialnia: "sypialnia",
   "sypialnia dziecięca": "sypialnia dziecięca",
-  "sypialnia dziecieca": "sypialnia dziecięca",
+  "sypialnia dziececa": "sypialnia dziecięca",
   salon: "salon",
   jadalnia: "jadalnia",
   lazienka: "łazienka",
@@ -257,6 +257,20 @@ const ROOM_TYPE_PL: Record<string, string> = {
   "pokój gier": "pokój gier",
   "pokoj gier": "pokój gier",
 };
+
+function withPolishDiacritics(s: string): string {
+  // Minimalne mapowanie najczęstszych braków polskich znaków.
+  // Cel: ładne etykiety w UI (nie lingwistyczna perfekcja).
+  return s
+    .replace(/\bpokoj\b/gi, "pokój")
+    .replace(/\bdzieciecy\b/gi, "dziecięcy")
+    .replace(/\bdziecieca\b/gi, "dziecięca")
+    .replace(/\blazienka\b/gi, "łazienka")
+    .replace(/\bwlasciciel\b/gi, "właściciel")
+    .replace(/\bsilownia\b/gi, "siłownia")
+    .replace(/\bprzedszkole\b/gi, "przedszkole")
+    .replace(/\bstyl\b/gi, "styl");
+}
 
 function prettyRoomType(x?: string | null): string | null {
   const raw = (x ?? "").trim();
@@ -273,7 +287,7 @@ function prettyRoomType(x?: string | null): string | null {
     .replace(/\s+/g, " ")
     .trim();
 
-  return normalized;
+  return withPolishDiacritics(normalized);
 }
 
 const STYLE_PL: Record<string, string> = {
@@ -434,8 +448,8 @@ export default function ListingDetailsPage() {
   const [styleLabel, setStyleLabel] = useState<string | null>(null);
   const [galleryItems, setGalleryItems] = useState<GalleryItem[] | null>(null);
 
-  const [hoveredPhoto, setHoveredPhoto] = useState<number | null>(null);
-  const [activePhoto, setActivePhoto] = useState<number | null>(null);
+  const [hoveredPhoto, setHoveredPhoto] = useState<number | null>(null); // kept only for UI highlight; not used for info panel
+  const [activePhotoId, setActivePhotoId] = useState<number | null>(null);
   const [showAllPhotos, setShowAllPhotos] = useState(false);
 
   useEffect(() => {
@@ -591,6 +605,23 @@ export default function ListingDetailsPage() {
     return [] as GalleryItem[];
   }, [galleryItems]);
 
+  const visibleGallery = useMemo(() => {
+    const list = showAllPhotos ? gallery : gallery.slice(0, 9);
+    return list;
+  }, [gallery, showAllPhotos]);
+
+  const activeIndex = useMemo(() => {
+    if (activePhotoId == null) return null;
+    const idx = visibleGallery.findIndex((p) => p.id === activePhotoId);
+    return idx >= 0 ? idx : null;
+  }, [activePhotoId, visibleGallery]);
+
+  const infoPhoto = useMemo(() => {
+    const idx = typeof activeIndex === "number" ? activeIndex : null;
+    if (typeof idx !== "number" || idx < 0) return null;
+    return visibleGallery[idx] ?? null;
+  }, [activeIndex, visibleGallery]);
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -608,6 +639,15 @@ export default function ListingDetailsPage() {
           </div>
           <div style={{ color: "var(--muted)", fontSize: 13, fontWeight: 600 }}>
             {data?.address ?? ""}
+            {data?.id ? (
+              <>
+                {" "}
+                <span style={{ opacity: 0.9 }}>•</span>{" "}
+                <span title="ID mieszkania" style={{ fontWeight: 800 }}>
+                  ID: {data.id}
+                </span>
+              </>
+            ) : null}
           </div>
         </div>
 
@@ -680,7 +720,30 @@ export default function ListingDetailsPage() {
                       {geoLabel ? (
                         <span style={{ fontWeight: 700 }}>{formatLocationLabel(geoLabel)}</span>
                       ) : geoLoading ? (
-                        <span>ustalanie…</span>
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 8,
+                            fontWeight: 700,
+                            color: "var(--muted)",
+                          }}
+                          aria-label="Ustalanie adresu"
+                          title="Ustalanie adresu (OSM)"
+                        >
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              width: 10,
+                              height: 10,
+                              borderRadius: 999,
+                              border: "2px solid rgba(139,92,246,0.35)",
+                              borderTopColor: "rgba(139,92,246,0.95)",
+                              animation: "spin 0.9s linear infinite",
+                            }}
+                          />
+                          ustalanie adresu…
+                        </span>
                       ) : (
                         <code>
                           {data.coords.lat.toFixed(5)}, {data.coords.lon.toFixed(5)}
@@ -693,6 +756,10 @@ export default function ListingDetailsPage() {
                           <span style={{ fontWeight: 700 }}>{styleLabel}</span>
                         </div>
                       )}
+
+                      <style>
+                        {`@keyframes spin { to { transform: rotate(360deg); } }`}
+                      </style>
                     </div>
                   )}
                 </div>
@@ -709,23 +776,29 @@ export default function ListingDetailsPage() {
                 {gallery.length > 0 ? (
                   <>
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-                      {(showAllPhotos ? gallery : gallery.slice(0, 9)).map((ph, i) => {
+                      {visibleGallery.map((ph, i) => {
                         const label = buildPhotoHoverLabel(ph);
-                        const isActive = (activePhoto ?? hoveredPhoto) === i;
+                        const isActive = (activeIndex ?? hoveredPhoto) === i;
 
                         return (
-                          <a
+                          <button
                             key={`${ph.id}-${ph.url}-${i}`}
-                            href={ph.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ display: "block" }}
+                            type="button"
                             title={label}
+                            aria-label={`Zdjęcie ${i + 1}. ${label}`}
                             onMouseEnter={() => setHoveredPhoto(i)}
                             onMouseLeave={() => setHoveredPhoto(null)}
                             onFocus={() => setHoveredPhoto(i)}
                             onBlur={() => setHoveredPhoto(null)}
-                            onClick={() => setActivePhoto(i)}
+                            onClick={() => setActivePhotoId(ph.id)}
+                            style={{
+                              display: "block",
+                              padding: 0,
+                              border: 0,
+                              background: "transparent",
+                              cursor: "pointer",
+                              textAlign: "left",
+                            }}
                           >
                             <div style={{ position: "relative" }}>
                               <img
@@ -749,67 +822,66 @@ export default function ListingDetailsPage() {
                                   (e.currentTarget as HTMLImageElement).style.display = "none";
                                 }}
                               />
-
-                              {/* overlay removed: opis jest w panelu poniżej */}
                             </div>
-                          </a>
+                          </button>
                         );
                       })}
                     </div>
 
-                    {/* Panel z informacjami: bez ucinania, bez nagłówka i numeru */}
-                    {(() => {
-                      const idx = activePhoto ?? hoveredPhoto;
-                      const ph = typeof idx === "number" ? (showAllPhotos ? gallery[idx] : gallery.slice(0, 9)[idx]) : null;
-                      if (!ph) return null;
+                    {/* Panel z informacjami: stała wysokość (bez "skakania") */}
+                    <div
+                      className="card"
+                      style={{
+                        marginTop: 10,
+                        padding: 12,
+                        background: "rgba(17,24,39,0.35)",
+                        border: "1px solid rgba(139,92,246,0.25)",
+                        minHeight: 92,
+                      }}
+                      aria-live="polite"
+                    >
+                      {infoPhoto ? (
+                        (() => {
+                          const ph = infoPhoto;
+                          const typeLabel = prettyPhotoType(ph.photo_type) ?? "brak typu";
+                          const roomLabel = prettyRoomType(ph.room_type);
+                          const roomStyle = (ph.room_style ?? "").trim() || null;
 
-                      const typeLabel = prettyPhotoType(ph.photo_type) ?? "brak typu";
-                      const roomLabel = prettyRoomType(ph.room_type);
-                      const roomStyle = (ph.room_style ?? "").trim() || null;
+                          const rawType = (ph.photo_type ?? "").trim().toLowerCase();
+                          const isExterior = rawType === "exterior" || rawType === "non-interior";
 
-                      const rawType = (ph.photo_type ?? "").trim().toLowerCase();
-                      const isExterior = rawType === "exterior" || rawType === "non-interior";
+                          return (
+                            <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+                              <div>
+                                <span style={{ color: "var(--muted)", fontWeight: 700 }}>Typ:&nbsp;</span>
+                                <span style={{ fontWeight: 800 }}>{typeLabel}</span>
+                              </div>
 
-                      return (
-                        <div
-                          className="card"
-                          style={{
-                            marginTop: 10,
-                            padding: 12,
-                            background: "rgba(17,24,39,0.35)",
-                            border: "1px solid rgba(139,92,246,0.25)",
-                          }}
-                        >
-                          <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
-                            <div>
-                              <span style={{ color: "var(--muted)", fontWeight: 700 }}>Typ:&nbsp;</span>
-                              <span style={{ fontWeight: 800 }}>{typeLabel}</span>
-                            </div>
-
-                            {roomLabel && (
                               <div>
                                 <span style={{ color: "var(--muted)", fontWeight: 700 }}>Pomieszczenie:&nbsp;</span>
-                                <span style={{ fontWeight: 800 }}>{roomLabel}</span>
+                                <span style={{ fontWeight: 800 }}>{roomLabel ?? "—"}</span>
                               </div>
-                            )}
 
-                            {roomStyle && (
                               <div>
                                 <span style={{ color: "var(--muted)", fontWeight: 700 }}>Styl pomieszczenia:&nbsp;</span>
-                                <span style={{ fontWeight: 800 }}>{roomStyle}</span>
+                                <span style={{ fontWeight: 800 }}>{roomStyle ?? "—"}</span>
                               </div>
-                            )}
 
-                            {isExterior && (
-                              <div>
-                                <span style={{ color: "var(--muted)", fontWeight: 700 }}>Dodatkowy opis:&nbsp;</span>
-                                <span style={{ fontWeight: 700 }}>Zdjęcie nie podlega dokładnej analizie.</span>
-                              </div>
-                            )}
-                          </div>
+                              {isExterior && (
+                                <div>
+                                  <span style={{ color: "var(--muted)", fontWeight: 700 }}>Dodatkowy opis:&nbsp;</span>
+                                  <span style={{ fontWeight: 700 }}>Zdjęcie nie podlega dokładnej analizie.</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()
+                      ) : (
+                        <div style={{ color: "var(--muted)", fontWeight: 700, fontSize: 13 }}>
+                          Kliknij zdjęcie, aby zobaczyć jego opis.
                         </div>
-                      );
-                    })()}
+                      )}
+                    </div>
 
                     {gallery.length > 9 && (
                       <div style={{ marginTop: 10, display: "flex", justifyContent: "center" }}>
@@ -819,7 +891,7 @@ export default function ListingDetailsPage() {
                           onClick={() => {
                             setShowAllPhotos((v) => !v);
                             setHoveredPhoto(null);
-                            setActivePhoto(null);
+                            // keep activePhotoId; if it becomes invisible it will fall back to hover
                           }}
                           style={{ padding: "10px 14px" }}
                         >
