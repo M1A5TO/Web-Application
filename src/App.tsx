@@ -12,7 +12,9 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
-          <img className="brand-logo" src="/M1A5TO.png" alt="M1A5TO" />
+          <Link to="/" aria-label="Przejdź do wyszukiwania" style={{ lineHeight: 0 }}>
+            <img className="brand-logo" src="/M1A5TO.png" alt="M1A5TO" />
+          </Link>
 
           <div className="brand-center">
             <div className="brand-title">M1A5TO</div>

@@ -4,9 +4,10 @@ type Props = {
   listing: Listing;
   markerLabel?: string;
   locationLabel?: string; // adres z reverse-geocoding (opcjonalnie)
+  disableInternalLinks?: boolean; // when card is wrapped in a Link, avoid nested <a>
 };
 
-export default function ListingCard({ listing, markerLabel, locationLabel }: Props) {
+export default function ListingCard({ listing, markerLabel, locationLabel, disableInternalLinks }: Props) {
   const profileLabel: Record<NonNullable<Listing["profileType"]>, string> = {
     rodzinny: "Rodzinny",
     studencki: "Studencki",
@@ -22,6 +23,8 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
   const mapHref = listing.coords
     ? `https://www.google.com/maps?q=${listing.coords.lat},${listing.coords.lon}`
     : undefined;
+
+  const isLocLoading = !!listing.coords && !locationLabel;
 
   return (
     <div
@@ -132,21 +135,59 @@ export default function ListingCard({ listing, markerLabel, locationLabel }: Pro
 
         {locationLabel ? (
           <span style={{ fontWeight: 600 }}>{locationLabel}</span>
+        ) : isLocLoading ? (
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              fontWeight: 700,
+              color: "#9ca3af",
+            }}
+            aria-label="Ustalanie adresu"
+            title="Ustalanie adresu (OSM)"
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 999,
+                border: "2px solid rgba(139,92,246,0.35)",
+                borderTopColor: "rgba(139,92,246,0.95)",
+                animation: "spin 0.9s linear infinite",
+              }}
+            />
+            ustalanie adresu…
+          </span>
         ) : coordsText ? (
           <>
             <code>{coordsText}</code>
             {mapHref ? (
-              <>
-                {" · "}
-                <a href={mapHref} target="_blank" rel="noreferrer">
-                  Pokaż na mapie
-                </a>
-              </>
+              disableInternalLinks ? (
+                <>
+                  {" · "}
+                  <span style={{ color: "#9ca3af", fontWeight: 600 }} title={mapHref}>
+                    Pokaż na mapie
+                  </span>
+                </>
+              ) : (
+                <>
+                  {" · "}
+                  <a href={mapHref} target="_blank" rel="noreferrer">
+                    Pokaż na mapie
+                  </a>
+                </>
+              )
             ) : null}
           </>
         ) : (
           <small style={{ color: "#9ca3af" }}>—</small>
         )}
+
+        <style>
+          {`@keyframes spin { to { transform: rotate(360deg); } }`}
+        </style>
       </div>
     </div>
   );
