@@ -1,15 +1,21 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import CityAutocomplete from "../components/CityAutocomplete";
+import cities from "../data/cities.json";
 
 export default function Home() {
   const nav = useNavigate();
   const [location, setLocation] = useState("");
+  const [isLocationValid, setIsLocationValid] = useState(false);
   const [profile, setProfile] = useState<"uniwersalne" | "student" | "singiel" | "wlasciciel_psa" | "rodzina">("uniwersalne");
   const [priceMax, setPriceMax] = useState<string>("");
   const [areaMin, setAreaMin] = useState<string>("");
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
+
+    if (!isLocationValid) return;
+
     const q = new URLSearchParams({
       location,
       profile,
@@ -22,12 +28,14 @@ export default function Home() {
   return (
     <form className="card" onSubmit={submit} style={{ maxWidth: 760, margin: "0 auto", display: "grid", gap: 16 }}>
       <div>
-        <label className="label">Wprowadź lokalizację</label>
-        <input
-          className="input"
+        <CityAutocomplete
+          id="location"
+          label="Wprowadź lokalizację"
           value={location}
-          onChange={(e) => setLocation(e.target.value)}
-          placeholder="np. Gdańsk, Warszawa, Wrocław"
+          onChange={setLocation}
+          onValidChange={setIsLocationValid}
+          cities={cities as unknown as string[]}
+          placeholder="Zacznij pisać, np. Gdańsk"
           required
         />
       </div>
@@ -105,6 +113,7 @@ export default function Home() {
         <button
           className="button button--outline"
           type="submit"
+          disabled={!isLocationValid}
           style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}
         >
           <svg

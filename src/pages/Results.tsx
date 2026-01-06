@@ -81,6 +81,12 @@ function buildStreetLabelFromNominatim(j: NominatimResponse | null): string | nu
   return null;
 }
 
+function buildFallbackLabel(j: NominatimResponse | null, lat: number, lon: number): string {
+  const city = j?.address?.city || j?.address?.town || j?.address?.village || j?.address?.municipality || j?.address?.county;
+  if (city) return city;
+  return `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+}
+
 // (cache key helper removed; Results no longer uses sessionStorage caching)
 
 type ResultsNavState = {
@@ -468,45 +474,78 @@ export default function Results() {
   const pagerTokens = useMemo(() => buildPagerTokens(page, totalPages), [page, totalPages]);
 
   // Reverse geocoding dla bieżącej strony (tylko brakujące ID, z cache)
+  // - retry (czasem Nominatim zwraca pusto / throttling)
+  // - fallback: miasto z response albo same koordynaty
   useEffect(() => {
     const ctrl = new AbortController();
 
-    (async () => {
-      for (const l of pageItems) {
-        if (!l.coords) continue;
-        if (geoById[l.id]) continue; // już mamy
+    const missing = pageItems.filter((l) => l.coords && !geoById[l.id]);
+    if (missing.length === 0) return () => ctrl.abort();
 
+    let cancelled = false;
+
+    async function reverseOne(l: Listing) {
+      if (!l.coords) return;
+      const { lat, lon } = l.coords;
+
+      const zoom = 16; // slightly lower zoom => more stable city/road results
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(
+        lat
+      )}&lon=${encodeURIComponent(lon)}&zoom=${zoom}&addressdetails=1`;
+
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (cancelled) return;
         try {
-          const url =
-            `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(l.coords.lat)}&lon=${encodeURIComponent(
-              l.coords.lon
-            )}&zoom=18&addressdetails=1`;
-
           const res = await fetch(url, {
             signal: ctrl.signal,
-            headers: { Accept: "application/json" },
+            headers: {
+              Accept: "application/json",
+              "Accept-Language": "pl",
+            },
           });
 
-          if (!res.ok) continue;
+          if (res.status === 429) {
+            await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+            continue;
+          }
+
+          if (!res.ok) {
+            await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
+            continue;
+          }
 
           const json = (await res.json()) as NominatimResponse;
-          const label = buildStreetLabelFromNominatim(json);
-
-          if (label) {
-            setGeoById((prev) => (prev[l.id] ? prev : { ...prev, [l.id]: label }));
-          }
+          const label = buildStreetLabelFromNominatim(json) ?? buildFallbackLabel(json, lat, lon);
+          setGeoById((prev) => (prev[l.id] ? prev : { ...prev, [l.id]: label }));
+          return;
         } catch (e) {
           if ((e as any)?.name === "AbortError") return;
-          // ignorujemy błędy – fallback pozostaje w karcie
+          await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
         }
-
-        // delikatne „oddechy” dla Nominatim (żeby nie walić requestami hurtem)
-        await new Promise((r) => setTimeout(r, 150));
       }
+
+      // last resort: coords
+      setGeoById((prev) => (prev[l.id] ? prev : { ...prev, [l.id]: `${lat.toFixed(5)}, ${lon.toFixed(5)}` }));
+    }
+
+    (async () => {
+      // simple concurrency limit = 2
+      const queue = [...missing];
+      const workers = Array.from({ length: Math.min(2, queue.length) }, async () => {
+        while (!cancelled && queue.length > 0) {
+          const l = queue.shift()!;
+          await reverseOne(l);
+          await new Promise((r) => setTimeout(r, 180));
+        }
+      });
+
+      await Promise.all(workers);
     })();
 
-    return () => ctrl.abort();
-    // geoById celowo nie w deps – to cache, nie trigger
+    return () => {
+      cancelled = true;
+      ctrl.abort();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pageItems, geoById]);
 
