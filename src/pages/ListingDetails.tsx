@@ -655,8 +655,8 @@ export default function ListingDetailsPage() {
           <button
             className="button button--outline"
             onClick={() => {
-              // Prefer history back to preserve Results state (page/scroll/cached items).
-              // If user opened details directly (no history), fallback to results + query.
+              // Prefer history back so we keep the navigation state snapshot from Results.
+              // Fallback to results URL if user opened details directly.
               if (window.history.length > 1) navigate(-1);
               else navigate(`/results${search}`);
             }}
