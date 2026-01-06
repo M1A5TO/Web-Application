@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext } from "react";
 import { fetchListings, fetchApartmentsCount } from "../api/client";
 import type { Listing } from "../api/types";
 import ListingCard from "../components/ListingCard";
 import ResultsMap from "../components/ResultsMap";
 import { useLocation, useNavigate, Link } from "react-router-dom";
+import { ResultsCacheContext } from "../App";
+import type { ResultsSnapshot } from "../App";
 
 type SortKey = "relevance" | "priceAsc" | "priceDesc" | "areaDesc" | "areaAsc";
 
@@ -90,6 +93,17 @@ type ResultsNavState = {
   };
 };
 
+type ResultsRestore = {
+  key: string;
+  items: Listing[];
+  page: number;
+  scrollY: number;
+  ts: number;
+  geoById?: Record<string, string>;
+};
+
+type ResultsSnapshotsMap = Record<string, ResultsSnapshot>;
+
 function getNavSnapshot(locationState: unknown, search: string) {
   const navState = (locationState ?? null) as ResultsNavState | null;
   const snap = navState?.fromResults;
@@ -105,15 +119,38 @@ export default function Results() {
   const { search } = locationObj;
   const q = new URLSearchParams(search);
 
-  // Snapshot from navigation state (back from details).
-  // NOTE: must be read synchronously for initial render, otherwise effects may refetch before hydration.
-  const navSnap = useMemo(() => getNavSnapshot(locationObj.state, search), [locationObj.state, search]);
-
-  // UI state that must survive history navigation should live in the URL
-  const sortFromUrl = isSortKey(q.get("sort")) ? (q.get("sort") as SortKey) : "relevance";
+  const resultsCache = useContext(ResultsCacheContext);
+  // Support multiple snapshots per session keyed by `search` (sort/targetCount included).
+  const snapshotsMap = (resultsCache?.snapshot as unknown as ResultsSnapshotsMap | null) ?? null;
+  const [sort, setSort] = useState<SortKey>(isSortKey(q.get("sort")) ? (q.get("sort") as SortKey) : "relevance");
   const targetFromUrlRaw = q.get("targetCount");
   const targetFromUrl = targetFromUrlRaw === "ALL" ? Number.MAX_SAFE_INTEGER : Number(targetFromUrlRaw);
+  const [targetCount, setTargetCount] = useState<number>(
+    Number.isFinite(targetFromUrl) && targetFromUrl > 0 ? targetFromUrl : 100
+  );
 
+  // Build the effective search string from current state (used for Link URLs and caching).
+  const linkSearch = useMemo(() => {
+    const next = new URLSearchParams(search);
+    next.set("sort", sort);
+    next.set("targetCount", targetCount === Number.MAX_SAFE_INTEGER ? "ALL" : String(targetCount));
+    return `?${next.toString()}`;
+  }, [search, sort, targetCount]);
+
+  const cachedSnap = snapshotsMap && snapshotsMap[linkSearch] ? (snapshotsMap[linkSearch] as unknown as ResultsRestore) : null;
+
+  // NOTE: We intentionally do NOT invalidate the snapshot on every search change here.
+  // The snapshot is keyed by `search` and consumed only when it matches exactly.
+  // Clearing it aggressively could race with URL updates and leave the UI empty.
+
+  // Snapshot source (session-only cache preferred; history state as fallback)
+  // NOTE: must be synchronous for initial render.
+  const navSnap = useMemo(
+    () => cachedSnap ?? getNavSnapshot(locationObj.state, linkSearch),
+    [cachedSnap, locationObj.state, linkSearch]
+  );
+
+  // UI state that must survive history navigation should live in the URL
   const location = q.get("location") ?? "";
   const profile = q.get("profile") ?? "uniwersalne";
   const navigate = useNavigate();
@@ -130,15 +167,10 @@ export default function Results() {
   const areaMin = q.get("areaMin") ? Number(q.get("areaMin")) : undefined;
   const maxDistanceKm = q.get("maxDistanceKm") ? Number(q.get("maxDistanceKm")) : undefined;
 
-  const [sort, setSort] = useState<SortKey>(sortFromUrl);
-
   // Backend sort_by value used for fetching
   const sortBy = useMemo(() => sortKeyToApiSortBy(sort), [sort]);
 
   // how many offers we want cached client-side
-  const [targetCount, setTargetCount] = useState<number>(
-    Number.isFinite(targetFromUrl) && targetFromUrl > 0 ? targetFromUrl : 100
-  );
   const [lastLoadedTarget, setLastLoadedTarget] = useState<number>(
     Array.isArray(navSnap?.items) ? navSnap!.items.length : 0
   );
@@ -146,12 +178,12 @@ export default function Results() {
   const [countError, setCountError] = useState<string | null>(null);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
 
-  const [items, setItems] = useState<Listing[]>(() => (Array.isArray(navSnap?.items) ? navSnap!.items : []));
+  const [items, setItems] = useState<Listing[]>(() => (Array.isArray(navSnap?.items) ? (navSnap!.items as Listing[]) : []));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // cache adresów po ID ogłoszenia
-  const [geoById, setGeoById] = useState<Record<string, string>>({});
+  const [geoById, setGeoById] = useState<Record<string, string>>(() => (cachedSnap?.geoById ?? {}));
 
   // paginacja (client-side over cached items)
   const [page, setPage] = useState(() => (typeof navSnap?.page === "number" ? navSnap!.page : 1));
@@ -181,10 +213,12 @@ export default function Results() {
     if (!navSnap) return;
     setLoading(false);
     setError(null);
+    // Also restore cached address labels if present.
+    if (cachedSnap?.geoById) setGeoById(cachedSnap.geoById);
     requestAnimationFrame(() => {
       window.scrollTo({ top: typeof navSnap.scrollY === "number" ? navSnap.scrollY : 0, behavior: "auto" });
     });
-  }, [navSnap]);
+  }, [navSnap, cachedSnap]);
 
   // reset when filters change (after hydration)
   useEffect(() => {
@@ -206,8 +240,16 @@ export default function Results() {
   }, [hydrated, location, profile, priceMax, areaMin, maxDistanceKm]);
 
   // When sort changes, we must refetch from scratch (skip/limit depends on order).
+  const didMountRef = useRef(false);
   useEffect(() => {
     if (!hydrated) return;
+
+    // On initial mount, `sort` is initialized from the URL; don't treat that as a user change.
+    // Also, if we restored a snapshot (cache/history), keep it and don't wipe it here.
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
 
     fetchRunId.current++;
     setPage(1);
@@ -364,20 +406,12 @@ export default function Results() {
   useEffect(() => {
     if (!hydrated) return;
 
-    // If we came back from details with a navigation snapshot, do not rewrite history.
-    // Replacing the entry here can drop location.state and break hydration.
-    if (hydratedFromNavRef.current) return;
-
-    const next = new URLSearchParams(search);
-    next.set("sort", sort);
-    next.set("targetCount", targetCount === Number.MAX_SAFE_INTEGER ? "ALL" : String(targetCount));
-
-    const nextSearch = `?${next.toString()}`;
-    if (nextSearch !== search) {
-      navigate({ pathname: "/results", search: nextSearch }, { replace: true });
+    // Keep the URL in sync immediately so Links use the correct query string.
+    if (linkSearch !== search) {
+      navigate({ pathname: "/results", search: linkSearch }, { replace: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, sort, targetCount]);
+  }, [hydrated, linkSearch, search]);
 
   // Sorting is done by backend (sort_by). Keep item order as provided by API.
   // When user selects a lower targetCount, just limit the visible list.
@@ -474,7 +508,7 @@ export default function Results() {
     return () => ctrl.abort();
     // geoById celowo nie w deps – to cache, nie trigger
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pageItems]);
+  }, [pageItems, geoById]);
 
   return (
     <div style={{ display: "grid", gap: 12 }}>
@@ -616,16 +650,34 @@ export default function Results() {
               return (
                 <Link
                   key={l.id}
-                  to={`/listing/${l.id}${search}`}
+                  to={`/listing/${l.id}${linkSearch}`}
                   style={{ textDecoration: "none", color: "inherit" }}
                   state={{
                     fromResults: {
-                      search,
+                      search: linkSearch,
                       items,
                       page,
                       scrollY: window.scrollY,
                       ts: Date.now(),
                     },
+                  }}
+                  onClickCapture={() => {
+                    // Persist snapshot for *this* exact results URL (search includes sort/targetCount).
+                    const snap: ResultsSnapshot = {
+                      key: linkSearch,
+                      items,
+                      page,
+                      scrollY: window.scrollY,
+                      ts: Date.now(),
+                      geoById,
+                    };
+
+                    if (!resultsCache) return;
+                    const current = (resultsCache.snapshot as unknown as ResultsSnapshotsMap | null) ?? {};
+                    resultsCache.setSnapshot({
+                      ...current,
+                      [linkSearch]: snap,
+                    } as unknown as any);
                   }}
                 >
                   {/* Prevent nested anchors: ListingCard can render an <a> to Google Maps. */}
@@ -788,7 +840,7 @@ export default function Results() {
                   };
                 })}
               onMarkerClick={(id) => {
-                navigate(`/listing/${id}${search}`);
+                navigate(`/listing/${id}${linkSearch}`);
               }}
             />
           </div>
