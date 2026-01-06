@@ -64,9 +64,13 @@ type SortDir = "asc" | "desc";
 
 export type ApartmentsSortKey = "price" | "footage" | "attractiveness";
 
+type SortByApi = "profile" | "price_desc" | "price_asc" | "footage_desc" | "footage_asc";
+
 type ListPaging = {
   skip?: number;
   limit?: number;
+  /** Preferred backend sort (documented by API): profile/price_desc/price_asc/footage_desc/footage_asc */
+  sortBy?: SortByApi;
   sortKey?: ApartmentsSortKey;
   sortDir?: SortDir;
 };
@@ -98,6 +102,9 @@ function buildListUrl(params: SearchParams, paging?: ListPaging): string {
   if (params.profile) url.searchParams.set("profile", searchProfileToBackend[params.profile]);
   if (params.priceMax != null) url.searchParams.set("max_price", String(params.priceMax));
   if (params.areaMin != null) url.searchParams.set("min_footage", String(params.areaMin));
+
+  // Backend sorting (documented): sort_by
+  if (paging?.sortBy) url.searchParams.set("sort_by", paging.sortBy);
 
   // Optional backend sorting (if supported). If the API ignores these params, it will fall back to its default ordering.
   if (paging?.sortKey) url.searchParams.set("sort", paging.sortKey);
