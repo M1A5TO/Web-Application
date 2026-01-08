@@ -2,8 +2,9 @@
 import type { Listing, ListingDetails, SearchParams, ProfileType } from "./types";
 
 // Vite: typowanie env bez "any"
+// W dockerowym dev (Vite) używamy proxy: /api -> http://api:8000
 const API_BASE_URL: string =
-  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "https://api.matiko.ovh";
+  (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api";
 
 /* ===== Typy zgodne z OpenAPI ===== */
 
