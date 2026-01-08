@@ -29,14 +29,11 @@ Artefakty produkcyjne trafiają do katalogu `dist/`.
 ## Konfiguracja API
 Aplikacja komunikuje się z backendem przez `src/api/client.ts`.
 
-Domyślny backend to:
-- `https://api.matiko.ovh`
-
 Opcjonalnie możesz nadpisać adres API zmienną środowiskową Vite:
 
 1. Utwórz plik `.env.local` w katalogu projektu:
 ```env
-VITE_API_BASE_URL=https://api.matiko.ovh
+VITE_API_BASE_URL=(link do API)
 ```
 2. Uruchom ponownie `npm run dev`.
 
