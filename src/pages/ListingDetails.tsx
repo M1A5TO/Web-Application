@@ -920,6 +920,48 @@ export default function ListingDetailsPage() {
               {/* ATRAKCYJNOŚĆ */}
               <div>
                 <div className="label">Atrakcyjność mieszkania</div>
+
+                {(() => {
+                  const selectedScore =
+                    selectedProfile === "uniwersalne"
+                      ? data.scores?.overall
+                      : selectedProfile === "rodzina"
+                        ? data.scores?.family
+                        : selectedProfile === "student"
+                          ? data.scores?.commute
+                          : selectedProfile === "singiel"
+                            ? data.scores?.services
+                            : selectedProfile === "wlasciciel_psa"
+                              ? data.scores?.green
+                              : undefined;
+
+                  const isZero = typeof selectedScore === "number" && selectedScore === 0;
+                  const poiCount = Array.isArray(data.poi) ? data.poi.length : 0;
+                  const noPoi = poiCount === 0;
+
+                  // Jeśli backend zwrócił 0 (często dla profilu uniwersalnego, i wtedy też dla reszty)
+                  // pokażmy informację, że brak było usług do policzenia atrakcyjności.
+                  if (!isZero && !noPoi) return null;
+
+                  return (
+                    <div
+                      className="card"
+                      style={{
+                        marginTop: 6,
+                        marginBottom: 8,
+                        padding: 12,
+                        background: "rgba(17,24,39,0.25)",
+                        border: "1px solid rgba(251,191,36,0.25)",
+                        color: "var(--muted)",
+                        fontWeight: 700,
+                        fontSize: 13,
+                      }}
+                    >
+                      Mieszkanie nie podlega analizie atrakcyjności ze względu na brak usług w okolicy.
+                    </div>
+                  );
+                })()}
+
                 <div
                   style={{
                     display: "grid",
