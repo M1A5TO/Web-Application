@@ -450,7 +450,21 @@ export default function ListingDetailsPage() {
 
   const [hoveredPhoto, setHoveredPhoto] = useState<number | null>(null); // kept only for UI highlight; not used for info panel
   const [activePhotoId, setActivePhotoId] = useState<number | null>(null);
+  const [photoModalId, setPhotoModalId] = useState<number | null>(null);
   const [showAllPhotos, setShowAllPhotos] = useState(false);
+
+  // NOTE: gallery memo is defined later (after poiPoints) to keep layout logic unchanged.
+  // photoModal will also be derived later, right after gallery is defined.
+
+  // ESC zamyka modal
+  useEffect(() => {
+    if (photoModalId == null) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPhotoModalId(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [photoModalId]);
 
   useEffect(() => {
     if (!id) {
@@ -605,6 +619,11 @@ export default function ListingDetailsPage() {
     return [] as GalleryItem[];
   }, [galleryItems]);
 
+  const photoModal = useMemo(() => {
+    if (photoModalId == null) return null;
+    return gallery.find((p) => p.id === photoModalId) ?? null;
+  }, [photoModalId, gallery]);
+
   const visibleGallery = useMemo(() => {
     const list = showAllPhotos ? gallery : gallery.slice(0, 9);
     return list;
@@ -624,6 +643,106 @@ export default function ListingDetailsPage() {
 
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      {/* MODAL: duży podgląd zdjęcia */}
+      {photoModal ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Podgląd zdjęcia"
+          onMouseDown={(e) => {
+            // klik w tło zamyka
+            if (e.target === e.currentTarget) setPhotoModalId(null);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.65)",
+            zIndex: 9999,
+            display: "grid",
+            placeItems: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: "min(1100px, 96vw)",
+              maxHeight: "92vh",
+              overflow: "auto",
+              padding: 12,
+              display: "grid",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div style={{ fontWeight: 900 }}>Podgląd zdjęcia</div>
+              <button className="button button--outline" type="button" onClick={() => setPhotoModalId(null)}>
+                Zamknij
+              </button>
+            </div>
+
+            <img
+              src={photoModal.url}
+              alt="Podgląd zdjęcia"
+              referrerPolicy="no-referrer"
+              style={{
+                width: "100%",
+                maxHeight: "62vh",
+                objectFit: "contain",
+                borderRadius: 12,
+                border: "1px solid var(--border)",
+                background: "rgba(15,23,42,0.25)",
+              }}
+            />
+
+            <div
+              className="card"
+              style={{
+                padding: 12,
+                background: "rgba(17,24,39,0.35)",
+                border: "1px solid rgba(139,92,246,0.25)",
+              }}
+            >
+              {(() => {
+                const ph = photoModal;
+                const typeLabel = prettyPhotoType(ph.photo_type) ?? "brak typu";
+                const roomLabel = prettyRoomType(ph.room_type);
+                const roomStyle = (ph.room_style ?? "").trim() || null;
+
+                const rawType = (ph.photo_type ?? "").trim().toLowerCase();
+                const isExterior = rawType === "exterior" || rawType === "non-interior";
+
+                return (
+                  <div style={{ display: "grid", gap: 6, fontSize: 13 }}>
+                    <div>
+                      <span style={{ color: "var(--muted)", fontWeight: 700 }}>Typ:&nbsp;</span>
+                      <span style={{ fontWeight: 800 }}>{typeLabel}</span>
+                    </div>
+
+                    <div>
+                      <span style={{ color: "var(--muted)", fontWeight: 700 }}>Pomieszczenie:&nbsp;</span>
+                      <span style={{ fontWeight: 800 }}>{roomLabel ?? "—"}</span>
+                    </div>
+
+                    <div>
+                      <span style={{ color: "var(--muted)", fontWeight: 700 }}>Styl pomieszczenia:&nbsp;</span>
+                      <span style={{ fontWeight: 800 }}>{roomStyle ?? "—"}</span>
+                    </div>
+
+                    {isExterior && (
+                      <div>
+                        <span style={{ color: "var(--muted)", fontWeight: 700 }}>Dodatkowy opis:&nbsp;</span>
+                        <span style={{ fontWeight: 700 }}>Zdjęcie nie podlega dokładnej analizie.</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <div className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div style={{ minWidth: 0 }}>
           <div
@@ -790,7 +909,10 @@ export default function ListingDetailsPage() {
                             onMouseLeave={() => setHoveredPhoto(null)}
                             onFocus={() => setHoveredPhoto(i)}
                             onBlur={() => setHoveredPhoto(null)}
-                            onClick={() => setActivePhotoId(ph.id)}
+                            onClick={() => {
+                              if (activePhotoId === ph.id) setPhotoModalId(ph.id);
+                              else setActivePhotoId(ph.id);
+                            }}
                             style={{
                               display: "block",
                               padding: 0,
