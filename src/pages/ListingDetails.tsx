@@ -1151,7 +1151,14 @@ export default function ListingDetailsPage() {
                         Źródło
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                        <div style={{ fontWeight: 700, lineHeight: 1 }}>{data.source?.scraper ?? "—"}</div>
+                        <div style={{ fontWeight: 700, lineHeight: 1 }}>
+                          {(() => {
+                            const raw = (data.source?.scraper ?? "—").trim();
+                            // UI: poprawka nazwy źródła
+                            if (raw.toLowerCase() === "trójmiasto" || raw.toLowerCase() === "trojmiasto") return "trójmiasto.pl";
+                            return raw || "—";
+                          })()}
+                        </div>
                         {data.source?.url && (
                           <a
                             className="button button--outline"
