@@ -97,35 +97,39 @@ const searchProfileToLabel: Record<SearchParams["profile"], ProfileType> = {
 /* ===== Pomocnicze funkcje ===== */
 
 function buildListUrl(params: SearchParams, paging?: ListPaging): string {
-  const url = new URL("/apartments", API_BASE_URL);
+  // Używamy prostego łączenia stringów i URLSearchParams dla parametrów query
+  const searchParams = new URLSearchParams();
 
-  if (params.location) url.searchParams.set("city", params.location);
-  if (params.profile) url.searchParams.set("profile", searchProfileToBackend[params.profile]);
-  if (params.priceMax != null) url.searchParams.set("max_price", String(params.priceMax));
-  if (params.areaMin != null) url.searchParams.set("min_footage", String(params.areaMin));
+  if (params.location) searchParams.set("city", params.location);
+  if (params.profile) searchParams.set("profile", searchProfileToBackend[params.profile]);
+  if (params.priceMax != null) searchParams.set("max_price", String(params.priceMax));
+  if (params.areaMin != null) searchParams.set("min_footage", String(params.areaMin));
 
   // Backend sorting (documented): sort_by
-  if (paging?.sortBy) url.searchParams.set("sort_by", paging.sortBy);
+  if (paging?.sortBy) searchParams.set("sort_by", paging.sortBy);
 
   // Optional backend sorting (if supported). If the API ignores these params, it will fall back to its default ordering.
-  if (paging?.sortKey) url.searchParams.set("sort", paging.sortKey);
-  if (paging?.sortDir) url.searchParams.set("order", paging.sortDir);
+  if (paging?.sortKey) searchParams.set("sort", paging.sortKey);
+  if (paging?.sortDir) searchParams.set("order", paging.sortDir);
 
-  url.searchParams.set("skip", String(paging?.skip ?? 0));
-  url.searchParams.set("limit", String(paging?.limit ?? 10));
+  searchParams.set("skip", String(paging?.skip ?? 0));
+  searchParams.set("limit", String(paging?.limit ?? 10));
 
-  return url.toString();
+  const query = searchParams.toString();
+  return `${API_BASE_URL}/apartments${query ? `?${query}` : ""}`;
 }
 
 function buildCountUrl(params: SearchParams): string {
-  const url = new URL("/apartments/count", API_BASE_URL);
+  // Używamy prostego łączenia stringów i URLSearchParams dla parametrów query
+  const searchParams = new URLSearchParams();
 
-  if (params.location) url.searchParams.set("city", params.location);
-  if (params.priceMax != null) url.searchParams.set("max_price", String(params.priceMax));
-  if (params.areaMin != null) url.searchParams.set("min_footage", String(params.areaMin));
+  if (params.location) searchParams.set("city", params.location);
+  if (params.priceMax != null) searchParams.set("max_price", String(params.priceMax));
+  if (params.areaMin != null) searchParams.set("min_footage", String(params.areaMin));
 
   // NOTE: endpoint mirrors GET /apartments filtering; profile is currently NOT listed in docs.
-  return url.toString();
+  const query = searchParams.toString();
+  return `${API_BASE_URL}/apartments/count${query ? `?${query}` : ""}`;
 }
 
 function toNumberOrZero(v: string | number | null | undefined): number {
